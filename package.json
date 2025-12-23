@@ -1,0 +1,22 @@
+{
+  "name": "first-agent",
+  "module": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env src/agent.js",
+    "dev": "node --env-file=.env src/agent.js"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "dotenv": "^17.2.1",
+    "groq-sdk": "^0.27.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.16.5"
+  }
+}

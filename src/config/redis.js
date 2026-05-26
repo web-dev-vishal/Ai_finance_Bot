@@ -37,13 +37,11 @@ class RedisClient {
     if (host && port) {
       const config = {
         host,
-        port:               parseInt(port, 10),
-        username:           user,
+        port:                 parseInt(port, 10),
+        username:             user,
         maxRetriesPerRequest: 3,
-        enableReadyCheck:   true,
-        lazyConnect:        true,
-        // Redis Cloud requires TLS on most plans
-        tls:                {},
+        enableReadyCheck:     true,
+        lazyConnect:          true,
         // Reconnect strategy: try 3 times with 500ms delay
         retryStrategy: (times) => (times <= 3 ? 500 : null),
       };

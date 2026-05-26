@@ -1,5 +1,10 @@
 import { ObjectId } from 'mongodb';
 import dbConnection from '../config/database.js';
+import {
+  validateName,
+  validateAmount,
+  validateObjectId,
+} from '../utils/validators.js';
 
 class ExpenseModel {
   constructor() {
@@ -11,17 +16,25 @@ class ExpenseModel {
   }
 
   // ── Add ──────────────────────────────────────────────────────────────────
-  async add({ name, amount, category = 'General', description = '' }) {
-    if (!name?.trim()) throw new Error('Expense name is required.');
-    const num = Number(amount);
-    if (!Number.isFinite(num) || num <= 0) throw new Error('Amount must be a positive number.');
+  /**
+   * @param {{ name, amount, category?, description?, date? }} args
+   * date: optional ISO date string for recording past expenses (defaults to now)
+   */
+  async add({ name, amount, category = 'General', description = '', date }) {
+    const validName   = validateName(name);
+    const validAmount = validateAmount(amount);
+
+    // Allow recording past transactions via an explicit date
+    const txDate = date ? new Date(date) : new Date();
+    if (isNaN(txDate.getTime())) throw new Error(`Invalid date: "${date}". Use YYYY-MM-DD.`);
 
     const doc = {
-      name: name.trim(),
-      amount: num,
-      category: category.trim() || 'General',
-      description: description.trim(),
-      createdAt: new Date(),
+      name:        validName,
+      amount:      validAmount,
+      category:    (category?.trim() || 'General'),
+      description: (description?.trim() || ''),
+      date:        txDate,          // the actual transaction date
+      createdAt:   new Date(),      // when the record was created
     };
 
     const result = await this.collection.insertOne(doc);
@@ -30,35 +43,40 @@ class ExpenseModel {
 
   // ── Delete ────────────────────────────────────────────────────────────────
   async delete({ id }) {
-    if (!id || !ObjectId.isValid(id)) throw new Error('Valid expense ID is required.');
+    validateObjectId(id, 'expense ID');
     const result = await this.collection.deleteOne({ _id: new ObjectId(id) });
-    if (result.deletedCount === 0) throw new Error('Expense not found.');
-    return `🗑️  Expense ${id} deleted successfully.`;
+    if (result.deletedCount === 0) throw new Error(`Expense with ID "${id}" not found.`);
+    return `🗑️  Expense deleted (ID: ${id}).`;
   }
 
   // ── Update ────────────────────────────────────────────────────────────────
-  async update({ id, name, amount, category, description }) {
-    if (!id || !ObjectId.isValid(id)) throw new Error('Valid expense ID is required.');
-    const update = {};
-    if (name)        update.name        = name.trim();
-    if (amount)      update.amount      = Number(amount);
-    if (category)    update.category    = category.trim();
-    if (description !== undefined) update.description = description.trim();
-    update.updatedAt = new Date();
+  async update({ id, name, amount, category, description, date }) {
+    validateObjectId(id, 'expense ID');
+
+    const update = { updatedAt: new Date() };
+    if (name        !== undefined) update.name        = validateName(name);
+    if (amount      !== undefined) update.amount      = validateAmount(amount);
+    if (category    !== undefined) update.category    = category?.trim() || 'General';
+    if (description !== undefined) update.description = description?.trim() || '';
+    if (date        !== undefined) {
+      const d = new Date(date);
+      if (isNaN(d.getTime())) throw new Error(`Invalid date: "${date}".`);
+      update.date = d;
+    }
 
     const result = await this.collection.updateOne(
       { _id: new ObjectId(id) },
       { $set: update }
     );
-    if (result.matchedCount === 0) throw new Error('Expense not found.');
-    return `✏️  Expense ${id} updated successfully.`;
+    if (result.matchedCount === 0) throw new Error(`Expense with ID "${id}" not found.`);
+    return `✏️  Expense updated (ID: ${id}).`;
   }
 
   // ── Get total ─────────────────────────────────────────────────────────────
   async getTotal({ from, to, category } = {}) {
-    const match = { _seed: { $exists: false } };
+    const match = {};
     if (from && to) {
-      match.createdAt = { $gte: new Date(from), $lte: new Date(to) };
+      match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
     }
     if (category) match.category = category;
 
@@ -70,33 +88,54 @@ class ExpenseModel {
     return { total: result?.total ?? 0, count: result?.count ?? 0 };
   }
 
-  // ── Get all (with optional filters) ──────────────────────────────────────
-  async getAll({ from, to, category, search, limit = 20 } = {}) {
-    const match = { _seed: { $exists: false } };
-    if (from && to) match.createdAt = { $gte: new Date(from), $lte: new Date(to) };
-    if (category)   match.category  = category;
-    if (search)     match.$text     = { $search: search };
+  // ── Get all ───────────────────────────────────────────────────────────────
+  async getAll({ from, to, category, search, limit = 20, page = 1 } = {}) {
+    const match = {};
+    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+    if (category)   match.category = category;
+    if (search)     match.$text    = { $search: search };
+
+    const skip = (Math.max(1, Number(page)) - 1) * Number(limit);
+
+    const [rows, total] = await Promise.all([
+      this.collection
+        .find(match)
+        .sort({ date: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .toArray(),
+      this.collection.countDocuments(match),
+    ]);
+
+    return { rows, total, page: Number(page), limit: Number(limit) };
+  }
+
+  // ── Top N expenses ────────────────────────────────────────────────────────
+  async getTopExpenses({ from, to, limit = 5 } = {}) {
+    const match = {};
+    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
 
     return await this.collection
       .find(match)
-      .sort({ createdAt: -1 })
+      .sort({ amount: -1 })
       .limit(Number(limit))
       .toArray();
   }
 
   // ── Category breakdown ────────────────────────────────────────────────────
   async getByCategory({ from, to } = {}) {
-    const match = { _seed: { $exists: false } };
-    if (from && to) match.createdAt = { $gte: new Date(from), $lte: new Date(to) };
+    const match = {};
+    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
 
     return await this.collection.aggregate([
       { $match: match },
       {
         $group: {
-          _id: '$category',
+          _id:   '$category',
           total: { $sum: '$amount' },
           count: { $sum: 1 },
-          avg: { $avg: '$amount' },
+          avg:   { $avg: '$amount' },
+          max:   { $max: '$amount' },
         },
       },
       { $sort: { total: -1 } },
@@ -105,11 +144,11 @@ class ExpenseModel {
 
   // ── Monthly summary ───────────────────────────────────────────────────────
   async getMonthlySummary({ year } = {}) {
-    const match = { _seed: { $exists: false } };
+    const match = {};
     if (year) {
-      match.createdAt = {
+      match.date = {
         $gte: new Date(`${year}-01-01`),
-        $lte: new Date(`${year}-12-31T23:59:59`),
+        $lte: new Date(`${year}-12-31T23:59:59.999Z`),
       };
     }
 
@@ -118,8 +157,8 @@ class ExpenseModel {
       {
         $group: {
           _id: {
-            year:  { $year: '$createdAt' },
-            month: { $month: '$createdAt' },
+            year:  { $year: '$date' },
+            month: { $month: '$date' },
           },
           total: { $sum: '$amount' },
           count: { $sum: 1 },
@@ -127,6 +166,13 @@ class ExpenseModel {
       },
       { $sort: { '_id.year': 1, '_id.month': 1 } },
     ]).toArray();
+  }
+
+  // ── Export all (for CSV/JSON export) ─────────────────────────────────────
+  async exportAll({ from, to } = {}) {
+    const match = {};
+    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+    return await this.collection.find(match).sort({ date: -1 }).toArray();
   }
 }
 

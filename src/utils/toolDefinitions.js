@@ -1,17 +1,25 @@
+/**
+ * OpenAI / Groq function-calling tool definitions.
+ * Every tool here must have a matching case in agent.js handleToolCall().
+ */
 export const toolDefinitions = [
-  // ── Expense tools ──────────────────────────────────────────────────────────
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // EXPENSE TOOLS
+  // ══════════════════════════════════════════════════════════════════════════
   {
     type: 'function',
     function: {
       name: 'addExpense',
-      description: 'Record a new expense with optional category and description.',
+      description: 'Record a new expense. Supports optional category, description, and a custom date for past transactions.',
       parameters: {
         type: 'object',
         properties: {
-          name:        { type: 'string',  description: 'Short label for the expense (e.g. "Groceries")' },
-          amount:      { type: 'number',  description: 'Amount in INR (must be positive)' },
-          category:    { type: 'string',  description: 'Category such as Food, Transport, Rent, Entertainment, Health, etc.' },
-          description: { type: 'string',  description: 'Optional extra details' },
+          name:        { type: 'string',  description: 'Short label (e.g. "Groceries", "Uber ride")' },
+          amount:      { type: 'number',  description: 'Amount in INR — must be positive' },
+          category:    { type: 'string',  description: 'Category: Food, Transport, Rent, Entertainment, Health, Shopping, Utilities, Education, Other' },
+          description: { type: 'string',  description: 'Optional extra notes' },
+          date:        { type: 'string',  description: 'Transaction date in YYYY-MM-DD format. Defaults to today.' },
         },
         required: ['name', 'amount'],
       },
@@ -21,11 +29,11 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'deleteExpense',
-      description: 'Delete an expense by its MongoDB ObjectId.',
+      description: 'Permanently delete an expense by its full MongoDB ObjectId.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Full MongoDB ObjectId of the expense to delete' },
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId of the expense' },
         },
         required: ['id'],
       },
@@ -35,15 +43,16 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'updateExpense',
-      description: 'Update an existing expense by its MongoDB ObjectId.',
+      description: 'Update one or more fields of an existing expense. Only provided fields are changed.',
       parameters: {
         type: 'object',
         properties: {
-          id:          { type: 'string', description: 'Full MongoDB ObjectId of the expense' },
+          id:          { type: 'string', description: 'Full 24-character MongoDB ObjectId' },
           name:        { type: 'string' },
           amount:      { type: 'number' },
           category:    { type: 'string' },
           description: { type: 'string' },
+          date:        { type: 'string', description: 'YYYY-MM-DD' },
         },
         required: ['id'],
       },
@@ -53,13 +62,13 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'getTotalExpense',
-      description: 'Get total expenses, optionally filtered by date range and/or category.',
+      description: 'Get the sum of all expenses, optionally filtered by date range and/or category.',
       parameters: {
         type: 'object',
         properties: {
-          from:     { type: 'string', description: 'Start date YYYY-MM-DD' },
-          to:       { type: 'string', description: 'End date YYYY-MM-DD' },
-          category: { type: 'string', description: 'Filter by category' },
+          from:     { type: 'string', description: 'Start date YYYY-MM-DD (inclusive)' },
+          to:       { type: 'string', description: 'End date YYYY-MM-DD (inclusive)' },
+          category: { type: 'string', description: 'Filter by category name' },
         },
       },
     },
@@ -68,7 +77,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'listExpenses',
-      description: 'List recent expenses with optional filters.',
+      description: 'List expenses with optional filters and pagination.',
       parameters: {
         type: 'object',
         properties: {
@@ -76,7 +85,8 @@ export const toolDefinitions = [
           to:       { type: 'string',  description: 'End date YYYY-MM-DD' },
           category: { type: 'string',  description: 'Filter by category' },
           search:   { type: 'string',  description: 'Full-text search keyword' },
-          limit:    { type: 'integer', description: 'Max rows to return (default 20)' },
+          limit:    { type: 'integer', description: 'Records per page (default 20)' },
+          page:     { type: 'integer', description: 'Page number (default 1)' },
         },
       },
     },
@@ -85,7 +95,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'expenseCategoryBreakdown',
-      description: 'Show total expenses grouped by category.',
+      description: 'Show total, count, average, and max expenses grouped by category.',
       parameters: {
         type: 'object',
         properties: {
@@ -95,20 +105,38 @@ export const toolDefinitions = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'getTopExpenses',
+      description: 'Show the highest individual expense transactions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          from:  { type: 'string',  description: 'Start date YYYY-MM-DD' },
+          to:    { type: 'string',  description: 'End date YYYY-MM-DD' },
+          limit: { type: 'integer', description: 'How many to show (default 5)' },
+        },
+      },
+    },
+  },
 
-  // ── Income tools ───────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+  // INCOME TOOLS
+  // ══════════════════════════════════════════════════════════════════════════
   {
     type: 'function',
     function: {
       name: 'addIncome',
-      description: 'Record a new income with optional source and description.',
+      description: 'Record a new income entry. Supports optional source, description, and a custom date.',
       parameters: {
         type: 'object',
         properties: {
-          name:        { type: 'string',  description: 'Short label (e.g. "Salary May")' },
-          amount:      { type: 'number',  description: 'Amount in INR (must be positive)' },
-          source:      { type: 'string',  description: 'Source such as Salary, Freelance, Business, Investment, Gift, etc.' },
-          description: { type: 'string',  description: 'Optional extra details' },
+          name:        { type: 'string',  description: 'Short label (e.g. "Salary May", "Freelance project")' },
+          amount:      { type: 'number',  description: 'Amount in INR — must be positive' },
+          source:      { type: 'string',  description: 'Source: Salary, Freelance, Business, Investment, Rental, Gift, Other' },
+          description: { type: 'string',  description: 'Optional extra notes' },
+          date:        { type: 'string',  description: 'Transaction date in YYYY-MM-DD format. Defaults to today.' },
         },
         required: ['name', 'amount'],
       },
@@ -118,11 +146,11 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'deleteIncome',
-      description: 'Delete an income record by its MongoDB ObjectId.',
+      description: 'Permanently delete an income record by its full MongoDB ObjectId.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Full MongoDB ObjectId of the income to delete' },
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId' },
         },
         required: ['id'],
       },
@@ -132,15 +160,16 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'updateIncome',
-      description: 'Update an existing income record by its MongoDB ObjectId.',
+      description: 'Update one or more fields of an existing income record.',
       parameters: {
         type: 'object',
         properties: {
-          id:          { type: 'string', description: 'Full MongoDB ObjectId of the income' },
+          id:          { type: 'string', description: 'Full 24-character MongoDB ObjectId' },
           name:        { type: 'string' },
           amount:      { type: 'number' },
           source:      { type: 'string' },
           description: { type: 'string' },
+          date:        { type: 'string', description: 'YYYY-MM-DD' },
         },
         required: ['id'],
       },
@@ -150,13 +179,13 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'getTotalIncome',
-      description: 'Get total income, optionally filtered by date range and/or source.',
+      description: 'Get the sum of all income, optionally filtered by date range and/or source.',
       parameters: {
         type: 'object',
         properties: {
           from:   { type: 'string', description: 'Start date YYYY-MM-DD' },
           to:     { type: 'string', description: 'End date YYYY-MM-DD' },
-          source: { type: 'string', description: 'Filter by source' },
+          source: { type: 'string', description: 'Filter by source name' },
         },
       },
     },
@@ -165,7 +194,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'listIncomes',
-      description: 'List recent income records with optional filters.',
+      description: 'List income records with optional filters and pagination.',
       parameters: {
         type: 'object',
         properties: {
@@ -173,7 +202,8 @@ export const toolDefinitions = [
           to:     { type: 'string',  description: 'End date YYYY-MM-DD' },
           source: { type: 'string',  description: 'Filter by source' },
           search: { type: 'string',  description: 'Full-text search keyword' },
-          limit:  { type: 'integer', description: 'Max rows to return (default 20)' },
+          limit:  { type: 'integer', description: 'Records per page (default 20)' },
+          page:   { type: 'integer', description: 'Page number (default 1)' },
         },
       },
     },
@@ -182,7 +212,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'incomeSourceBreakdown',
-      description: 'Show total income grouped by source.',
+      description: 'Show total, count, average, and max income grouped by source.',
       parameters: {
         type: 'object',
         properties: {
@@ -193,12 +223,28 @@ export const toolDefinitions = [
     },
   },
 
-  // ── Balance & Reports ──────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+  // BALANCE & ANALYTICS
+  // ══════════════════════════════════════════════════════════════════════════
   {
     type: 'function',
     function: {
       name: 'getMoneyBalance',
-      description: 'Return current balance (total income minus total expenses). Optionally filter by date range.',
+      description: 'Show net balance (income − expenses), transaction counts, and savings rate. Optionally scoped to a date range.',
+      parameters: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: 'Start date YYYY-MM-DD' },
+          to:   { type: 'string', description: 'End date YYYY-MM-DD' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getSavingsRate',
+      description: 'Calculate what percentage of income was saved (not spent) in a given period.',
       parameters: {
         type: 'object',
         properties: {
@@ -212,7 +258,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'getMonthlySummary',
-      description: 'Show a month-by-month income vs expense breakdown for a given year.',
+      description: 'Month-by-month income vs expense table for a given year, with totals row.',
       parameters: {
         type: 'object',
         properties: {
@@ -225,7 +271,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'getFullReport',
-      description: 'Generate a complete financial report including balance, monthly summary, category and source breakdowns.',
+      description: 'Generate a complete financial report: balance, monthly summary, category breakdown, source breakdown, and top expenses — all scoped to a year.',
       parameters: {
         type: 'object',
         properties: {
@@ -235,17 +281,20 @@ export const toolDefinitions = [
     },
   },
 
-  // ── Budget tools ───────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+  // BUDGET TOOLS
+  // ══════════════════════════════════════════════════════════════════════════
   {
     type: 'function',
     function: {
       name: 'setBudget',
-      description: 'Set or update a monthly spending budget.',
+      description: 'Set or update a monthly spending budget with an optional alert threshold.',
       parameters: {
         type: 'object',
         properties: {
-          month:  { type: 'string', description: 'Month in YYYY-MM format (e.g. "2025-05")' },
-          amount: { type: 'number', description: 'Budget amount in INR' },
+          month:   { type: 'string',  description: 'Month in YYYY-MM format (e.g. "2025-05")' },
+          amount:  { type: 'number',  description: 'Budget amount in INR' },
+          alertAt: { type: 'integer', description: 'Percentage at which to warn (default 80). Range: 1–100.' },
         },
         required: ['month', 'amount'],
       },
@@ -255,7 +304,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'checkBudget',
-      description: 'Check how much of the budget has been spent for a given month.',
+      description: 'Check how much of the monthly budget has been spent, with a progress bar and status.',
       parameters: {
         type: 'object',
         properties: {
@@ -282,17 +331,107 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'listBudgets',
-      description: 'List all saved monthly budgets.',
+      description: 'List all saved monthly budgets with their alert thresholds.',
       parameters: { type: 'object', properties: {} },
     },
   },
 
-  // ── Search ─────────────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+  // RECURRING TRANSACTIONS
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    type: 'function',
+    function: {
+      name: 'addRecurring',
+      description: 'Set up a recurring expense or income (e.g. monthly rent, weekly salary).',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:        { type: 'string',  description: 'Label for the recurring item' },
+          amount:      { type: 'number',  description: 'Amount in INR' },
+          type:        { type: 'string',  description: '"expense" or "income"' },
+          frequency:   { type: 'string',  description: '"daily", "weekly", "monthly", or "yearly"' },
+          category:    { type: 'string',  description: 'Category (for expenses)' },
+          source:      { type: 'string',  description: 'Source (for income)' },
+          description: { type: 'string',  description: 'Optional notes' },
+          startDate:   { type: 'string',  description: 'First occurrence date YYYY-MM-DD. Defaults to today.' },
+        },
+        required: ['name', 'amount', 'type', 'frequency'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'listRecurring',
+      description: 'List all active recurring transactions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', description: 'Filter by "expense" or "income". Omit for all.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getDueRecurring',
+      description: 'Show recurring transactions that are due today or overdue.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'postRecurring',
+      description: 'Post a due recurring transaction as an actual expense or income record and advance its next-due date.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Full MongoDB ObjectId or last-6 chars of the recurring item' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'deactivateRecurring',
+      description: 'Pause a recurring transaction without deleting it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'deleteRecurring',
+      description: 'Permanently delete a recurring transaction template.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SEARCH & EXPORT
+  // ══════════════════════════════════════════════════════════════════════════
   {
     type: 'function',
     function: {
       name: 'searchTransactions',
-      description: 'Full-text search across all expenses and incomes.',
+      description: 'Full-text search across all expenses and incomes by name or description.',
       parameters: {
         type: 'object',
         properties: {
@@ -300,6 +439,21 @@ export const toolDefinitions = [
           limit: { type: 'integer', description: 'Max results per type (default 10)' },
         },
         required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'exportTransactions',
+      description: 'Export all transactions to a CSV or JSON file saved to the Desktop.',
+      parameters: {
+        type: 'object',
+        properties: {
+          format: { type: 'string',  description: '"csv" (default) or "json"' },
+          from:   { type: 'string',  description: 'Start date YYYY-MM-DD (optional)' },
+          to:     { type: 'string',  description: 'End date YYYY-MM-DD (optional)' },
+        },
       },
     },
   },

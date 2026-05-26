@@ -1,54 +1,83 @@
+/**
+ * MongoDB connection singleton.
+ * Manages connection lifecycle and ensures all indexes exist on startup.
+ */
 import { MongoClient } from 'mongodb';
 
 class DatabaseConnection {
   constructor() {
-    this.uri = process.env.MONGO_URI || 'mongodb://localhost:27017';
-    this.dbName = process.env.DB_NAME || 'financeBot';
+    this.uri    = process.env.MONGO_URI || 'mongodb://localhost:27017';
+    this.dbName = process.env.DB_NAME   || 'financeBot';
     this.client = null;
-    this.db = null;
+    this.db     = null;
   }
 
   async connect() {
     try {
-      this.client = new MongoClient(this.uri);
+      this.client = new MongoClient(this.uri, {
+        serverSelectionTimeoutMS: 5000, // fail fast if MongoDB is not running
+      });
       await this.client.connect();
       this.db = this.client.db(this.dbName);
-      console.log('✅ Connected to MongoDB →', this.uri);
+      console.log(`✅  MongoDB connected  →  ${this.uri}  /  ${this.dbName}`);
       return this.db;
-    } catch (error) {
-      console.error('❌ MongoDB connection failed:', error.message);
-      throw error;
+    } catch (err) {
+      console.error(`❌  MongoDB connection failed: ${err.message}`);
+      console.error('    Make sure MongoDB is running (mongod) and MONGO_URI is correct in .env');
+      throw err;
     }
   }
 
+  /**
+   * Create all indexes idempotently.
+   * Safe to call on every startup — MongoDB ignores duplicate index creation.
+   */
   async initializeCollections() {
-    const expenseCol = this.db.collection('expenses');
-    const incomeCol  = this.db.collection('incomes');
-    const budgetCol  = this.db.collection('budgets');
+    const expenses  = this.db.collection('expenses');
+    const incomes   = this.db.collection('incomes');
+    const budgets   = this.db.collection('budgets');
+    const recurring = this.db.collection('recurring');
 
-    // Create indexes for performance (idempotent)
-    await expenseCol.createIndex({ createdAt: -1 });
-    await expenseCol.createIndex({ category: 1 });
-    await expenseCol.createIndex({ name: 'text', description: 'text' });
+    await Promise.all([
+      // Expenses
+      expenses.createIndex({ date: -1 }),
+      expenses.createIndex({ createdAt: -1 }),
+      expenses.createIndex({ category: 1 }),
+      expenses.createIndex({ name: 'text', description: 'text' }),
 
-    await incomeCol.createIndex({ createdAt: -1 });
-    await incomeCol.createIndex({ source: 1 });
-    await incomeCol.createIndex({ name: 'text', description: 'text' });
+      // Incomes
+      incomes.createIndex({ date: -1 }),
+      incomes.createIndex({ createdAt: -1 }),
+      incomes.createIndex({ source: 1 }),
+      incomes.createIndex({ name: 'text', description: 'text' }),
 
-    await budgetCol.createIndex({ month: 1 }, { unique: true });
+      // Budgets — one document per month
+      budgets.createIndex({ month: 1 }, { unique: true }),
 
-    console.log(`✅ Database "${this.dbName}" ready.`);
+      // Recurring
+      recurring.createIndex({ nextDue: 1 }),
+      recurring.createIndex({ active: 1 }),
+      recurring.createIndex({ type: 1 }),
+    ]);
+
+    console.log(`✅  Collections and indexes ready.`);
   }
 
   async close() {
     if (this.client) {
       await this.client.close();
-      console.log('✅ MongoDB connection closed.');
+      console.log('✅  MongoDB connection closed.');
     }
   }
 
+  /**
+   * Returns the active database instance.
+   * Throws if called before connect().
+   */
   getDatabase() {
-    if (!this.db) throw new Error('DB not connected. Call connect() first.');
+    if (!this.db) {
+      throw new Error('Database not connected. Call connect() before using the database.');
+    }
     return this.db;
   }
 }

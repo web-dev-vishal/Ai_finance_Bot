@@ -1,4 +1,5 @@
 import dbConnection from '../config/database.js';
+import { validateMonth, validateAmount } from '../utils/validators.js';
 
 class BudgetModel {
   constructor() {
@@ -9,23 +10,38 @@ class BudgetModel {
     this.collection = dbConnection.getDatabase().collection('budgets');
   }
 
-  // month format: "YYYY-MM"
-  async set({ month, amount }) {
-    if (!month || !/^\d{4}-\d{2}$/.test(month)) throw new Error('Month must be in YYYY-MM format.');
-    const num = Number(amount);
-    if (!Number.isFinite(num) || num <= 0) throw new Error('Budget amount must be a positive number.');
+  /**
+   * Set or update a monthly budget.
+   * @param {{ month: string, amount: number, alertAt?: number }} args
+   * alertAt: percentage (0–100) at which to warn. Defaults to 80.
+   */
+  async set({ month, amount, alertAt = 80 }) {
+    const validMonth  = validateMonth(month);
+    const validAmount = validateAmount(amount);
+
+    const alertPct = Math.min(100, Math.max(1, Number(alertAt) || 80));
 
     await this.collection.updateOne(
-      { month },
-      { $set: { month, amount: num, updatedAt: new Date() } },
+      { month: validMonth },
+      {
+        $set: {
+          month:     validMonth,
+          amount:    validAmount,
+          alertAt:   alertPct,
+          updatedAt: new Date(),
+        },
+        $setOnInsert: { createdAt: new Date() },
+      },
       { upsert: true }
     );
-    return `✅ Budget for ${month} set to ₹${num}`;
+    return `✅ Budget for ${validMonth} set to ₹${validAmount} (alert at ${alertPct}%).`;
   }
 
-  async get({ month }) {
+  /**
+   * Get a single month's budget, or all budgets if month is omitted.
+   */
+  async get({ month } = {}) {
     if (!month) {
-      // return all budgets
       return await this.collection.find({}).sort({ month: -1 }).toArray();
     }
     return await this.collection.findOne({ month });
@@ -33,6 +49,7 @@ class BudgetModel {
 
   async delete({ month }) {
     if (!month) throw new Error('Month is required.');
+    validateMonth(month);
     const result = await this.collection.deleteOne({ month });
     if (result.deletedCount === 0) throw new Error(`No budget found for ${month}.`);
     return `🗑️  Budget for ${month} deleted.`;

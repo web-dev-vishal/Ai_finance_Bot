@@ -1,9 +1,9 @@
 {
   "name": "financebot",
-  "version": "2.0.0",
-  "description": "AI-powered personal finance terminal bot using Groq LLaMA + MongoDB",
-  "module": "index.js",
+  "version": "3.0.0",
+  "description": "AI-powered personal finance terminal assistant — Groq LLaMA + MongoDB",
   "type": "module",
+  "main": "src/agent.js",
   "scripts": {
     "start": "node --env-file=.env src/agent.js",
     "dev":   "node --env-file=.env --watch src/agent.js"
@@ -14,5 +14,7 @@
   },
   "engines": {
     "node": ">=20.6.0"
-  }
+  },
+  "keywords": ["finance", "ai", "groq", "mongodb", "terminal", "cli"],
+  "license": "MIT"
 }

@@ -7,13 +7,17 @@ import readline from 'node:readline/promises';
 import { stdin, stdout, exit } from 'node:process';
 
 import dbConnection    from './config/database.js';
+import redisClient     from './config/redis.js';
 import expenseModel    from './models/expense.js';
 import incomeModel     from './models/income.js';
 import budgetModel     from './models/budget.js';
 import recurringModel  from './models/recurring.js';
+import userModel       from './models/user.js';
 import groqService     from './services/groqService.js';
 import financeService  from './services/financeService.js';
 import { toolDefinitions } from './utils/toolDefinitions.js';
+import { runAuthGate, runLogout } from './utils/authCLI.js';
+import { loadSession } from './utils/sessionStore.js';
 
 // ── Force UTF-8 output on Windows (fixes box-drawing characters in cmd/PS) ───
 if (process.platform === 'win32') {
@@ -30,6 +34,14 @@ if (process.platform === 'win32') {
 if (!process.env.GROQ_API_KEY) {
   console.error('\n❌  GROQ_API_KEY is not set in your .env file.');
   console.error('    Copy .env.example → .env and add your key.\n');
+  exit(1);
+}
+
+if (!process.env.PASETO_SECRET_KEY) {
+  console.error('\n❌  PASETO_SECRET_KEY is not set in your .env file.');
+  console.error('    Generate one by running:');
+  console.error('    node -e "const c=require(\'crypto\');const {privateKey}=c.generateKeyPairSync(\'ed25519\');console.log(privateKey.export({type:\'pkcs8\',format:\'der\'}).toString(\'hex\'))"');
+  console.error('    Then paste the output as PASETO_SECRET_KEY in .env\n');
   exit(1);
 }
 
@@ -117,7 +129,7 @@ function printHelp() {
   console.log(ex('Export all transactions as CSV'));
   console.log(ex('Export transactions from 2025-01-01 to 2025-05-31 as JSON'));
 
-  console.log(`\n${dim('  Commands: "help" · "clear" · "bye" / "exit" / "quit"')}`);
+  console.log(`\n${dim('  Commands: "help" · "clear" · "logout" · "bye" / "exit" / "quit"')}`);
   console.log(`${line}\n`);
 }
 
@@ -127,6 +139,10 @@ class FinanceBotApp {
     this.rl = null;
     // Conversation history (excludes system message — injected fresh per call)
     this.history = [];
+    // Authenticated user (set after auth gate)
+    this.currentUser = null;
+    // Current session token (for logout)
+    this.sessionToken = null;
   }
 
   // ── System prompt (rebuilt each turn so the date is always current) ─────
@@ -135,11 +151,13 @@ class FinanceBotApp {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     });
     const year = new Date().getFullYear();
+    const userName = this.currentUser?.name || 'User';
 
     return {
       role: 'system',
       content: `You are FinanceBot, a smart and friendly personal finance assistant for Indian users.
 Currency is always INR (₹). Today's date is ${today}.
+The logged-in user's name is ${userName}.
 
 Available tools:
   EXPENSE:   addExpense, deleteExpense, updateExpense, getTotalExpense, listExpenses, expenseCategoryBreakdown, getTopExpenses, getExpenseById
@@ -167,10 +185,12 @@ Strict rules:
   async initialize() {
     await dbConnection.connect();
     await dbConnection.initializeCollections();
+    await redisClient.connect();
     expenseModel.initialize();
     incomeModel.initialize();
     budgetModel.initialize();
     recurringModel.initialize();
+    userModel.initialize();
   }
 
   // ── Dispatch a single tool call to the right service method ────────────
@@ -319,6 +339,11 @@ Strict rules:
   async startChatLoop() {
     this.rl = readline.createInterface({ input: stdin, output: stdout });
 
+    // ── Auth gate ──────────────────────────────────────────────────────────
+    this.currentUser = await runAuthGate(this.rl);
+    // Load the session token so we can blacklist it on logout
+    this.sessionToken = await loadSession();
+
     printBanner();
     printHelp();
 
@@ -341,6 +366,15 @@ Strict rules:
       // ── Built-in commands ──────────────────────────────────────────────
       if (['bye', 'exit', 'quit'].includes(lower)) {
         console.log(clr('green', '\n👋  Goodbye! Stay financially healthy.\n'));
+        break;
+      }
+
+      if (lower === 'logout') {
+        if (this.sessionToken) {
+          await runLogout(this.sessionToken);
+          this.sessionToken = null;
+        }
+        console.log(clr('yellow', '\n  Logged out. Restart the app to log in again.\n'));
         break;
       }
 
@@ -367,6 +401,7 @@ Strict rules:
     try {
       this.rl?.close();
     } catch { /* ignore */ }
+    await redisClient.close();
     await dbConnection.close();
   }
 }

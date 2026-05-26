@@ -37,6 +37,7 @@ class DatabaseConnection {
     const incomes   = this.db.collection('incomes');
     const budgets   = this.db.collection('budgets');
     const recurring = this.db.collection('recurring');
+    const users     = this.db.collection('users');
 
     await Promise.all([
       // Expenses
@@ -58,6 +59,10 @@ class DatabaseConnection {
       recurring.createIndex({ nextDue: 1 }),
       recurring.createIndex({ active: 1 }),
       recurring.createIndex({ type: 1 }),
+
+      // Users — unique email index
+      users.createIndex({ email: 1 }, { unique: true }),
+      users.createIndex({ createdAt: -1 }),
     ]);
 
     console.log(`✅  Collections and indexes ready.`);

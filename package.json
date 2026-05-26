@@ -6,15 +6,26 @@
   "main": "src/agent.js",
   "scripts": {
     "start": "node --env-file=.env src/agent.js",
-    "dev":   "node --env-file=.env --watch src/agent.js"
+    "dev": "node --env-file=.env --watch src/agent.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "groq-sdk": "^0.27.0",
-    "mongodb":  "^6.17.0"
+    "ioredis": "^5.11.0",
+    "mongodb": "^6.17.0",
+    "nodemailer": "^8.0.9",
+    "paseto": "^3.1.4"
   },
   "engines": {
     "node": ">=20.6.0"
   },
-  "keywords": ["finance", "ai", "groq", "mongodb", "terminal", "cli"],
+  "keywords": [
+    "finance",
+    "ai",
+    "groq",
+    "mongodb",
+    "terminal",
+    "cli"
+  ],
   "license": "MIT"
 }

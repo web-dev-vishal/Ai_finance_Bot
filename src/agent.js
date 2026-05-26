@@ -15,6 +15,17 @@ import groqService     from './services/groqService.js';
 import financeService  from './services/financeService.js';
 import { toolDefinitions } from './utils/toolDefinitions.js';
 
+// ── Force UTF-8 output on Windows (fixes box-drawing characters in cmd/PS) ───
+if (process.platform === 'win32') {
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync('chcp 65001', { stdio: 'ignore' });
+  } catch { /* non-critical */ }
+  // Also set stdout/stderr encoding
+  if (stdout.setDefaultEncoding) stdout.setDefaultEncoding('utf8');
+  if (process.stderr.setDefaultEncoding) process.stderr.setDefaultEncoding('utf8');
+}
+
 // ── Guard: fail fast if API key is missing ────────────────────────────────────
 if (!process.env.GROQ_API_KEY) {
   console.error('\n❌  GROQ_API_KEY is not set in your .env file.');

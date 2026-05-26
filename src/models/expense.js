@@ -1,9 +1,17 @@
+/**
+ * Expense model — Fix 1: All queries now scoped by userId.
+ * Cleanup 4: Uses parseSafeDate / endOfDay instead of string interpolation.
+ * Cleanup 1: validateDescription enforces 500-char limit.
+ */
 import { ObjectId } from 'mongodb';
 import dbConnection from '../config/database.js';
 import {
   validateName,
   validateAmount,
   validateObjectId,
+  validateDescription,
+  parseSafeDate,
+  endOfDay,
 } from '../utils/validators.js';
 
 class ExpenseModel {
@@ -16,25 +24,22 @@ class ExpenseModel {
   }
 
   // ── Add ──────────────────────────────────────────────────────────────────
-  /**
-   * @param {{ name, amount, category?, description?, date? }} args
-   * date: optional ISO date string for recording past expenses (defaults to now)
-   */
-  async add({ name, amount, category = 'General', description = '', date }) {
+  async add({ userId, name, amount, category = 'General', description = '', date }) {
+    if (!userId) throw new Error('userId is required.');
     const validName   = validateName(name);
     const validAmount = validateAmount(amount);
+    const validDesc   = validateDescription(description);
 
-    // Allow recording past transactions via an explicit date
-    const txDate = date ? new Date(date) : new Date();
-    if (isNaN(txDate.getTime())) throw new Error(`Invalid date: "${date}". Use YYYY-MM-DD.`);
+    const txDate = date ? parseSafeDate(date, 'transaction date') : new Date();
 
     const doc = {
+      userId:      new ObjectId(String(userId)),
       name:        validName,
       amount:      validAmount,
       category:    (category?.trim() || 'General'),
-      description: (description?.trim() || ''),
-      date:        txDate,          // the actual transaction date
-      createdAt:   new Date(),      // when the record was created
+      description: validDesc,
+      date:        txDate,
+      createdAt:   new Date(),
     };
 
     const result = await this.collection.insertOne(doc);
@@ -42,30 +47,31 @@ class ExpenseModel {
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
-  async delete({ id }) {
+  async delete({ userId, id }) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'expense ID');
-    const result = await this.collection.deleteOne({ _id: new ObjectId(id) });
+    const result = await this.collection.deleteOne({
+      _id:    new ObjectId(id),
+      userId: new ObjectId(String(userId)),
+    });
     if (result.deletedCount === 0) throw new Error(`Expense with ID "${id}" not found.`);
     return `🗑️  Expense deleted (ID: ${id}).`;
   }
 
   // ── Update ────────────────────────────────────────────────────────────────
-  async update({ id, name, amount, category, description, date }) {
+  async update({ userId, id, name, amount, category, description, date }) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'expense ID');
 
     const update = { updatedAt: new Date() };
     if (name        !== undefined) update.name        = validateName(name);
     if (amount      !== undefined) update.amount      = validateAmount(amount);
     if (category    !== undefined) update.category    = category?.trim() || 'General';
-    if (description !== undefined) update.description = description?.trim() || '';
-    if (date        !== undefined) {
-      const d = new Date(date);
-      if (isNaN(d.getTime())) throw new Error(`Invalid date: "${date}".`);
-      update.date = d;
-    }
+    if (description !== undefined) update.description = validateDescription(description);
+    if (date        !== undefined) update.date        = parseSafeDate(date, 'transaction date');
 
     const result = await this.collection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), userId: new ObjectId(String(userId)) },
       { $set: update }
     );
     if (result.matchedCount === 0) throw new Error(`Expense with ID "${id}" not found.`);
@@ -73,10 +79,11 @@ class ExpenseModel {
   }
 
   // ── Get total ─────────────────────────────────────────────────────────────
-  async getTotal({ from, to, category } = {}) {
-    const match = {};
+  async getTotal({ userId, from, to, category } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
     if (from && to) {
-      match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+      match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
     }
     if (category) match.category = category;
 
@@ -89,9 +96,10 @@ class ExpenseModel {
   }
 
   // ── Get all ───────────────────────────────────────────────────────────────
-  async getAll({ from, to, category, search, limit = 20, page = 1 } = {}) {
-    const match = {};
-    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+  async getAll({ userId, from, to, category, search, limit = 20, page = 1 } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
+    if (from && to) match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
     if (category)   match.category = category;
     if (search)     match.$text    = { $search: search };
 
@@ -111,9 +119,10 @@ class ExpenseModel {
   }
 
   // ── Top N expenses ────────────────────────────────────────────────────────
-  async getTopExpenses({ from, to, limit = 5 } = {}) {
-    const match = {};
-    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+  async getTopExpenses({ userId, from, to, limit = 5 } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
+    if (from && to) match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
 
     return await this.collection
       .find(match)
@@ -123,9 +132,10 @@ class ExpenseModel {
   }
 
   // ── Category breakdown ────────────────────────────────────────────────────
-  async getByCategory({ from, to } = {}) {
-    const match = {};
-    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+  async getByCategory({ userId, from, to } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
+    if (from && to) match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
 
     return await this.collection.aggregate([
       { $match: match },
@@ -143,12 +153,13 @@ class ExpenseModel {
   }
 
   // ── Monthly summary ───────────────────────────────────────────────────────
-  async getMonthlySummary({ year } = {}) {
-    const match = {};
+  async getMonthlySummary({ userId, year } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
     if (year) {
       match.date = {
-        $gte: new Date(`${year}-01-01`),
-        $lte: new Date(`${year}-12-31T23:59:59.999Z`),
+        $gte: parseSafeDate(`${year}-01-01`),
+        $lte: endOfDay(`${year}-12-31`),
       };
     }
 
@@ -156,10 +167,7 @@ class ExpenseModel {
       { $match: match },
       {
         $group: {
-          _id: {
-            year:  { $year: '$date' },
-            month: { $month: '$date' },
-          },
+          _id: { year: { $year: '$date' }, month: { $month: '$date' } },
           total: { $sum: '$amount' },
           count: { $sum: 1 },
         },
@@ -169,18 +177,35 @@ class ExpenseModel {
   }
 
   // ── Get by ID ─────────────────────────────────────────────────────────────
-  async getById({ id }) {
+  async getById({ userId, id }) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'expense ID');
-    const doc = await this.collection.findOne({ _id: new ObjectId(id) });
+    const doc = await this.collection.findOne({
+      _id:    new ObjectId(id),
+      userId: new ObjectId(String(userId)),
+    });
     if (!doc) throw new Error(`Expense with ID "${id}" not found.`);
     return doc;
   }
 
-  // ── Export all (for CSV/JSON export) ─────────────────────────────────────
-  async exportAll({ from, to } = {}) {
-    const match = {};
-    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+  // ── Count (for profile) ───────────────────────────────────────────────────
+  async countByUser(userId) {
+    if (!userId) return 0;
+    return await this.collection.countDocuments({ userId: new ObjectId(String(userId)) });
+  }
+
+  // ── Export all ────────────────────────────────────────────────────────────
+  async exportAll({ userId, from, to } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
+    if (from && to) match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
     return await this.collection.find(match).sort({ date: -1 }).toArray();
+  }
+
+  // ── Delete all by user (for account deletion) ─────────────────────────────
+  async deleteAllByUser(userId) {
+    if (!userId) throw new Error('userId is required.');
+    return await this.collection.deleteMany({ userId: new ObjectId(String(userId)) });
   }
 }
 

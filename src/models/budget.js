@@ -1,3 +1,8 @@
+/**
+ * Budget model — Fix 1: All queries now scoped by userId.
+ * Compound unique index on [userId, month] instead of just month.
+ */
+import { ObjectId } from 'mongodb';
 import dbConnection from '../config/database.js';
 import { validateMonth, validateAmount } from '../utils/validators.js';
 
@@ -10,21 +15,19 @@ class BudgetModel {
     this.collection = dbConnection.getDatabase().collection('budgets');
   }
 
-  /**
-   * Set or update a monthly budget.
-   * @param {{ month: string, amount: number, alertAt?: number }} args
-   * alertAt: percentage (0–100) at which to warn. Defaults to 80.
-   */
-  async set({ month, amount, alertAt = 80 }) {
+  // ── Set / upsert ──────────────────────────────────────────────────────────
+  async set({ userId, month, amount, alertAt = 80 }) {
+    if (!userId) throw new Error('userId is required.');
     const validMonth  = validateMonth(month);
     const validAmount = validateAmount(amount);
-
-    const alertPct = Math.min(100, Math.max(1, Number(alertAt) || 80));
+    const alertPct    = Math.min(100, Math.max(1, Number(alertAt) || 80));
+    const uid         = new ObjectId(String(userId));
 
     await this.collection.updateOne(
-      { month: validMonth },
+      { userId: uid, month: validMonth },
       {
         $set: {
+          userId:    uid,
           month:     validMonth,
           amount:    validAmount,
           alertAt:   alertPct,
@@ -37,22 +40,33 @@ class BudgetModel {
     return `✅ Budget for ${validMonth} set to ₹${validAmount} (alert at ${alertPct}%).`;
   }
 
-  /**
-   * Get a single month's budget, or all budgets if month is omitted.
-   */
-  async get({ month } = {}) {
+  // ── Get one or all ────────────────────────────────────────────────────────
+  async get({ userId, month } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const uid = new ObjectId(String(userId));
     if (!month) {
-      return await this.collection.find({}).sort({ month: -1 }).toArray();
+      return await this.collection.find({ userId: uid }).sort({ month: -1 }).toArray();
     }
-    return await this.collection.findOne({ month });
+    return await this.collection.findOne({ userId: uid, month });
   }
 
-  async delete({ month }) {
+  // ── Delete ────────────────────────────────────────────────────────────────
+  async delete({ userId, month }) {
+    if (!userId) throw new Error('userId is required.');
     if (!month) throw new Error('Month is required.');
     validateMonth(month);
-    const result = await this.collection.deleteOne({ month });
+    const result = await this.collection.deleteOne({
+      userId: new ObjectId(String(userId)),
+      month,
+    });
     if (result.deletedCount === 0) throw new Error(`No budget found for ${month}.`);
     return `🗑️  Budget for ${month} deleted.`;
+  }
+
+  // ── Delete all by user (for account deletion) ─────────────────────────────
+  async deleteAllByUser(userId) {
+    if (!userId) throw new Error('userId is required.');
+    return await this.collection.deleteMany({ userId: new ObjectId(String(userId)) });
   }
 }
 

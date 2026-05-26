@@ -1,6 +1,9 @@
 /**
  * FinanceBot — AI-powered personal finance terminal assistant
- * Entry point: src/agent.js
+ *
+ * Fix 1:  userId injected into every tool call from the authenticated session.
+ * Fix 4:  Ctrl+C in readPassword now triggers graceful shutdown via global handler.
+ * Feature 5: Auto-post due recurring transactions on startup.
  */
 
 import readline from 'node:readline/promises';
@@ -19,29 +22,25 @@ import { toolDefinitions } from './utils/toolDefinitions.js';
 import { runAuthGate, runLogout } from './utils/authCLI.js';
 import { loadSession } from './utils/sessionStore.js';
 
-// ── Force UTF-8 output on Windows (fixes box-drawing characters in cmd/PS) ───
+// ── Force UTF-8 output on Windows ────────────────────────────────────────────
 if (process.platform === 'win32') {
   try {
     const { execSync } = await import('node:child_process');
     execSync('chcp 65001', { stdio: 'ignore' });
   } catch { /* non-critical */ }
-  // Also set stdout/stderr encoding
   if (stdout.setDefaultEncoding) stdout.setDefaultEncoding('utf8');
   if (process.stderr.setDefaultEncoding) process.stderr.setDefaultEncoding('utf8');
 }
 
-// ── Guard: fail fast if API key is missing ────────────────────────────────────
+// ── Guards ────────────────────────────────────────────────────────────────────
 if (!process.env.GROQ_API_KEY) {
   console.error('\n❌  GROQ_API_KEY is not set in your .env file.');
   console.error('    Copy .env.example → .env and add your key.\n');
   exit(1);
 }
-
 if (!process.env.PASETO_SECRET_KEY) {
   console.error('\n❌  PASETO_SECRET_KEY is not set in your .env file.');
-  console.error('    Generate one by running:');
-  console.error('    node -e "const c=require(\'crypto\');const {privateKey}=c.generateKeyPairSync(\'ed25519\');const raw=privateKey.export({type:\'pkcs8\',format:\'der\'});const seed=raw.slice(-32);const pub=c.createPublicKey(privateKey).export({type:\'spki\',format:\'der\'}).slice(-32);console.log(Buffer.concat([seed,pub]).toString(\'hex\'));"');
-  console.error('    Then paste the output as PASETO_SECRET_KEY in .env\n');
+  console.error('    Generate one — see .env.example for the command.\n');
   exit(1);
 }
 
@@ -57,7 +56,6 @@ const C = {
   blue:    '\x1b[34m',
   magenta: '\x1b[35m',
 };
-
 const clr  = (color, text) => `${C[color]}${text}${C.reset}`;
 const bold = (text)         => `${C.bold}${text}${C.reset}`;
 const dim  = (text)         => `${C.dim}${text}${C.reset}`;
@@ -68,7 +66,7 @@ function printBanner() {
   console.log(`\n${line}`);
   console.log(clr('cyan', '║') + bold('       💰  FinanceBot  —  Personal Finance AI          ') + clr('cyan', '║'));
   console.log(`${line}`);
-  console.log(dim('  Groq LLaMA-3.3-70b  ·  MongoDB  ·  Node.js  ·  INR ₹\n'));
+  console.log(dim('  Groq LLaMA-3.3-70b  ·  MongoDB  ·  Redis  ·  INR ₹\n'));
 }
 
 function printHelp() {
@@ -129,6 +127,11 @@ function printHelp() {
   console.log(ex('Export all transactions as CSV'));
   console.log(ex('Export transactions from 2025-01-01 to 2025-05-31 as JSON'));
 
+  console.log(sec('Account'));
+  console.log(ex('Show my profile / who am I'));
+  console.log(ex('Change my password'));
+  console.log(ex('Delete my account'));
+
   console.log(`\n${dim('  Commands: "help" · "clear" · "logout" · "bye" / "exit" / "quit"')}`);
   console.log(`${line}\n`);
 }
@@ -136,21 +139,16 @@ function printHelp() {
 // ── FinanceBotApp ─────────────────────────────────────────────────────────────
 class FinanceBotApp {
   constructor() {
-    this.rl = null;
-    // Conversation history (excludes system message — injected fresh per call)
-    this.history = [];
-    // Authenticated user (set after auth gate)
-    this.currentUser = null;
-    // Current session token (for logout)
+    this.rl           = null;
+    this.history      = [];
+    this.currentUser  = null;
     this.sessionToken = null;
   }
 
-  // ── System prompt (rebuilt each turn so the date is always current) ─────
+  // ── System prompt ────────────────────────────────────────────────────────
   get systemMessage() {
-    const today = new Date().toLocaleDateString('en-IN', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    });
-    const year = new Date().getFullYear();
+    const today    = new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const year     = new Date().getFullYear();
     const userName = this.currentUser?.name || 'User';
 
     return {
@@ -167,6 +165,7 @@ Available tools:
   RECURRING: addRecurring, listRecurring, getDueRecurring, postRecurring, updateRecurring, deactivateRecurring, reactivateRecurring, deleteRecurring
   SEARCH:    searchTransactions
   EXPORT:    exportTransactions
+  ACCOUNT:   getProfile, changePassword, deleteAccount
 
 Strict rules:
 1. ALWAYS call the appropriate tool to answer finance questions. Never invent or guess numbers.
@@ -177,11 +176,12 @@ Strict rules:
 6. Keep conversational replies concise. Use ₹ for all amounts.
 7. If asked something unrelated to personal finance, politely decline and redirect.
 8. When a user adds a past transaction, use the date field — do not default to today.
-9. To show full details of one record, use getExpenseById or getIncomeById with the full ID.`,
+9. To show full details of one record, use getExpenseById or getIncomeById with the full ID.
+10. NEVER include userId in tool arguments — it is injected automatically.`,
     };
   }
 
-  // ── Initialise DB and models ────────────────────────────────────────────
+  // ── Initialise DB and models ──────────────────────────────────────────────
   async initialize() {
     await dbConnection.connect();
     await dbConnection.initializeCollections();
@@ -193,7 +193,12 @@ Strict rules:
     userModel.initialize();
   }
 
-  // ── Dispatch a single tool call to the right service method ────────────
+  // ── Fix 1: inject userId into every tool call ─────────────────────────────
+  _withUser(args) {
+    return { ...args, userId: this.currentUser._id };
+  }
+
+  // ── Dispatch tool calls ───────────────────────────────────────────────────
   async handleToolCall(toolCall) {
     const { name: fn, arguments: rawArgs } = toolCall.function;
 
@@ -204,73 +209,83 @@ Strict rules:
       return `❌ Could not parse arguments for tool "${fn}".`;
     }
 
+    // Inject userId for every call — LLM never sends it
+    const a = this._withUser(args);
+
     try {
       switch (fn) {
-        // ── Expense ──────────────────────────────────────────────────────
-        case 'addExpense':               return await financeService.addExpense(args);
-        case 'deleteExpense':            return await financeService.deleteExpense(args);
-        case 'updateExpense':            return await financeService.updateExpense(args);
-        case 'getTotalExpense':          return await financeService.getTotalExpense(args);
-        case 'listExpenses':             return await financeService.listExpenses(args);
-        case 'expenseCategoryBreakdown': return await financeService.expenseCategoryBreakdown(args);
-        case 'getTopExpenses':           return await financeService.getTopExpenses(args);
-        case 'getExpenseById':           return await financeService.getExpenseById(args);
+        // ── Expense ────────────────────────────────────────────────────────
+        case 'addExpense':               return await financeService.addExpense(a);
+        case 'deleteExpense':            return await financeService.deleteExpense(a);
+        case 'updateExpense':            return await financeService.updateExpense(a);
+        case 'getTotalExpense':          return await financeService.getTotalExpense(a);
+        case 'listExpenses':             return await financeService.listExpenses(a);
+        case 'expenseCategoryBreakdown': return await financeService.expenseCategoryBreakdown(a);
+        case 'getTopExpenses':           return await financeService.getTopExpenses(a);
+        case 'getExpenseById':           return await financeService.getExpenseById(a);
 
-        // ── Income ───────────────────────────────────────────────────────
-        case 'addIncome':                return await financeService.addIncome(args);
-        case 'deleteIncome':             return await financeService.deleteIncome(args);
-        case 'updateIncome':             return await financeService.updateIncome(args);
-        case 'getTotalIncome':           return await financeService.getTotalIncome(args);
-        case 'listIncomes':              return await financeService.listIncomes(args);
-        case 'incomeSourceBreakdown':    return await financeService.incomeSourceBreakdown(args);
-        case 'getIncomeById':            return await financeService.getIncomeById(args);
+        // ── Income ─────────────────────────────────────────────────────────
+        case 'addIncome':                return await financeService.addIncome(a);
+        case 'deleteIncome':             return await financeService.deleteIncome(a);
+        case 'updateIncome':             return await financeService.updateIncome(a);
+        case 'getTotalIncome':           return await financeService.getTotalIncome(a);
+        case 'listIncomes':              return await financeService.listIncomes(a);
+        case 'incomeSourceBreakdown':    return await financeService.incomeSourceBreakdown(a);
+        case 'getIncomeById':            return await financeService.getIncomeById(a);
 
-        // ── Analytics ────────────────────────────────────────────────────
-        case 'getMoneyBalance':          return await financeService.getMoneyBalance(args);
-        case 'getSavingsRate':           return await financeService.getSavingsRate(args);
-        case 'getMonthlySummary':        return await financeService.getMonthlySummary(args);
-        case 'getFullReport':            return await financeService.getFullReport(args);
+        // ── Analytics ──────────────────────────────────────────────────────
+        case 'getMoneyBalance':          return await financeService.getMoneyBalance(a);
+        case 'getSavingsRate':           return await financeService.getSavingsRate(a);
+        case 'getMonthlySummary':        return await financeService.getMonthlySummary(a);
+        case 'getFullReport':            return await financeService.getFullReport(a);
 
-        // ── Budget ───────────────────────────────────────────────────────
-        case 'setBudget':                return await financeService.setBudget(args);
-        case 'checkBudget':              return await financeService.checkBudget(args);
-        case 'deleteBudget':             return await financeService.deleteBudget(args);
-        case 'listBudgets':              return await financeService.listBudgets();
+        // ── Budget ─────────────────────────────────────────────────────────
+        case 'setBudget':                return await financeService.setBudget(a);
+        case 'checkBudget':              return await financeService.checkBudget(a);
+        case 'deleteBudget':             return await financeService.deleteBudget(a);
+        case 'listBudgets':              return await financeService.listBudgets(a);
 
-        // ── Recurring ────────────────────────────────────────────────────
-        case 'addRecurring':             return await financeService.addRecurring(args);
-        case 'listRecurring':            return await financeService.listRecurring(args);
-        case 'getDueRecurring':          return await financeService.getDueRecurring();
-        case 'postRecurring':            return await financeService.postRecurring(args);
-        case 'deactivateRecurring':      return await financeService.deactivateRecurring(args);
-        case 'reactivateRecurring':      return await financeService.reactivateRecurring(args);
-        case 'updateRecurring':          return await financeService.updateRecurring(args);
-        case 'deleteRecurring':          return await financeService.deleteRecurring(args);
+        // ── Recurring ──────────────────────────────────────────────────────
+        case 'addRecurring':             return await financeService.addRecurring(a);
+        case 'listRecurring':            return await financeService.listRecurring(a);
+        case 'getDueRecurring':          return await financeService.getDueRecurring(a);
+        case 'postRecurring':            return await financeService.postRecurring(a);
+        case 'deactivateRecurring':      return await financeService.deactivateRecurring(a);
+        case 'reactivateRecurring':      return await financeService.reactivateRecurring(a);
+        case 'updateRecurring':          return await financeService.updateRecurring(a);
+        case 'deleteRecurring':          return await financeService.deleteRecurring(a);
 
-        // ── Search & Export ──────────────────────────────────────────────
-        case 'searchTransactions':       return await financeService.searchTransactions(args);
-        case 'exportTransactions':       return await financeService.exportTransactions(args);
+        // ── Search & Export ────────────────────────────────────────────────
+        case 'searchTransactions':       return await financeService.searchTransactions(a);
+        case 'exportTransactions':       return await financeService.exportTransactions(a);
+
+        // ── Account (Feature 1, 2, 3) ──────────────────────────────────────
+        case 'getProfile':
+          return await financeService.getProfile(a);
+
+        case 'changePassword':
+          // Pass session token so it can be blacklisted after password change
+          return await financeService.changePassword({ ...a, token: this.sessionToken });
+
+        case 'deleteAccount':
+          return await financeService.deleteAccount({ ...a, token: this.sessionToken });
 
         default:
           return `⚠️  Unknown tool called: "${fn}". This is a bug — please report it.`;
       }
     } catch (err) {
-      // Return the error as a tool result so the AI can relay it to the user
       return `❌ ${fn} failed: ${err.message}`;
     }
   }
 
-  // ── One full agentic turn (user message → tool calls → final reply) ─────
+  // ── Agentic turn ──────────────────────────────────────────────────────────
   async runTurn(userInput) {
     this.history.push({ role: 'user', content: userInput });
 
-    // Agent-side history cap: keep last 40 messages (20 turns) to prevent
-    // unbounded memory growth. groqService also trims for the API token limit.
     if (this.history.length > 40) {
       this.history = this.history.slice(-40);
     }
 
-    // Agentic loop: keep calling until the model stops issuing tool calls
     while (true) {
       let response;
       try {
@@ -280,82 +295,103 @@ Strict rules:
         );
       } catch (err) {
         console.error(clr('red', `\n❌ Groq API error: ${err.message}\n`));
-        // Remove the failed user message so the history stays clean
         this.history.pop();
         return;
       }
 
       const message   = response.choices[0].message;
       const toolCalls = message.tool_calls;
-
-      // Push assistant message to history (may contain tool_calls)
       this.history.push(message);
 
-      // No tool calls → final text response
       if (!toolCalls || toolCalls.length === 0) {
         const text = message.content?.trim();
-        if (text) {
-          console.log('\n' + clr('green', 'FinanceBot') + clr('dim', ' ›') + ' ' + text + '\n');
-        }
+        if (text) console.log('\n' + clr('green', 'FinanceBot') + clr('dim', ' ›') + ' ' + text + '\n');
         return;
       }
 
-      // Execute each tool call and collect results
       for (const toolCall of toolCalls) {
-        const fnName = toolCall.function.name;
-
-        // Show a subtle "working" indicator
-        stdout.write(clr('dim', `  ⚙  ${fnName}…`) + '\r');
-
+        stdout.write(clr('dim', `  ⚙  ${toolCall.function.name}…`) + '\r');
         const output = await this.handleToolCall(toolCall);
-
-        // Clear the indicator line
         stdout.write(' '.repeat(50) + '\r');
-
-        this.history.push({
-          role:         'tool',
-          content:      String(output),
-          tool_call_id: toolCall.id,
-        });
+        this.history.push({ role: 'tool', content: String(output), tool_call_id: toolCall.id });
       }
-      // Loop back — the model will now see the tool results and either
-      // call more tools or produce a final text response.
     }
   }
 
-  // ── Check for due recurring transactions on startup ─────────────────────
-  async checkDueRecurring() {
+  // ── Feature 5: Auto-post due recurring transactions on startup ────────────
+  async autoPostDueRecurring() {
     try {
-      const due = await recurringModel.getDue();
-      if (due.length > 0) {
-        console.log(clr('yellow', `\n  ⏰  ${due.length} recurring transaction(s) are due. Type "show due recurring" to review.\n`));
+      const userId = this.currentUser._id;
+      const due    = await recurringModel.getDue(userId);
+      if (!due.length) return;
+
+      // Only auto-post items not already posted today
+      const today     = new Date();
+      today.setHours(0, 0, 0, 0);
+      const toPost    = due.filter(r => !r.lastPosted || new Date(r.lastPosted) < today);
+
+      if (!toPost.length) {
+        console.log(clr('dim', `\n  ⏰  ${due.length} recurring item(s) due but already posted today.\n`));
+        return;
       }
+
+      console.log(clr('yellow', `\n  ⏰  Auto-posting ${toPost.length} due recurring transaction(s)…`));
+
+      let posted = 0;
+      for (const rec of toPost) {
+        try {
+          if (rec.type === 'expense') {
+            await expenseModel.add({
+              userId,
+              name:        rec.name,
+              amount:      rec.amount,
+              category:    rec.category,
+              description: `Auto-posted from recurring (${rec.frequency})`,
+            });
+          } else {
+            await incomeModel.add({
+              userId,
+              name:        rec.name,
+              amount:      rec.amount,
+              source:      rec.source,
+              description: `Auto-posted from recurring (${rec.frequency})`,
+            });
+          }
+          await recurringModel.markPosted(String(rec._id));
+          console.log(clr('green', `     ✅  ${rec.name} — ₹${rec.amount} (${rec.frequency})`));
+          posted++;
+        } catch (err) {
+          console.log(clr('red', `     ❌  ${rec.name} failed: ${err.message}`));
+        }
+      }
+
+      console.log(clr('green', `\n  ✅  Auto-posted ${posted}/${toPost.length} recurring transaction(s).\n`));
     } catch {
       // Non-critical — silently ignore
     }
   }
 
-  // ── Main chat loop ───────────────────────────────────────────────────────
+  // ── Main chat loop ────────────────────────────────────────────────────────
   async startChatLoop() {
     this.rl = readline.createInterface({ input: stdin, output: stdout });
 
-    // ── Auth gate ──────────────────────────────────────────────────────────
-    this.currentUser = await runAuthGate(this.rl);
-    // Load the session token so we can blacklist it on logout
+    // Fix 4: expose shutdown so authCLI's Ctrl+C handler can call it
+    // The global SIGINT handler below already covers this — authCLI emits SIGINT
+    this.currentUser  = await runAuthGate(this.rl);
     this.sessionToken = await loadSession();
 
     printBanner();
     printHelp();
 
-    await this.checkDueRecurring();
+    // Feature 5: auto-post due recurring items right after login
+    await this.autoPostDueRecurring();
 
     while (true) {
       let raw;
       try {
         raw = await this.rl.question(clr('cyan', 'You') + clr('dim', ' › '));
       } catch {
-        // readline closed (e.g. Ctrl+D)
-        break;
+        break; // readline closed (Ctrl+D)
       }
 
       const input = raw.trim();
@@ -363,7 +399,6 @@ Strict rules:
 
       const lower = input.toLowerCase();
 
-      // ── Built-in commands ──────────────────────────────────────────────
       if (['bye', 'exit', 'quit'].includes(lower)) {
         console.log(clr('green', '\n👋  Goodbye! Stay financially healthy.\n'));
         break;
@@ -378,29 +413,18 @@ Strict rules:
         break;
       }
 
-      if (lower === 'help') {
-        printHelp();
-        continue;
-      }
+      if (lower === 'help')  { printHelp(); continue; }
+      if (lower === 'clear') { console.clear(); printBanner(); continue; }
 
-      if (lower === 'clear') {
-        console.clear();
-        printBanner();
-        continue;
-      }
-
-      // ── AI turn ────────────────────────────────────────────────────────
       await this.runTurn(input);
     }
 
     this.rl.close();
   }
 
-  // ── Graceful shutdown ────────────────────────────────────────────────────
+  // ── Graceful shutdown ─────────────────────────────────────────────────────
   async shutdown() {
-    try {
-      this.rl?.close();
-    } catch { /* ignore */ }
+    try { this.rl?.close(); } catch { /* ignore */ }
     await redisClient.close();
     await dbConnection.close();
   }
@@ -410,7 +434,8 @@ Strict rules:
 async function main() {
   const app = new FinanceBotApp();
 
-  // Handle Ctrl+C and kill signals gracefully
+  // Fix 4: SIGINT handler is registered BEFORE the auth gate starts.
+  // authCLI's readPassword calls process.exit(0) on Ctrl+C which triggers this.
   const onSignal = async (signal) => {
     console.log(clr('yellow', `\n\n  Received ${signal} — shutting down…`));
     await app.shutdown();

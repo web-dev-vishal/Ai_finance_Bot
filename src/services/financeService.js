@@ -1,7 +1,15 @@
+/**
+ * FinanceService — Fix 1: userId injected into every model call.
+ * Feature 1: getProfile()
+ * Feature 2: changePassword()
+ * Feature 3: deleteAccount()
+ */
 import expenseModel   from '../models/expense.js';
 import incomeModel    from '../models/income.js';
 import budgetModel    from '../models/budget.js';
 import recurringModel from '../models/recurring.js';
+import authService    from './authService.js';
+import userModel      from '../models/user.js';
 import { exportData } from '../utils/exporter.js';
 import { monthToDateRange } from '../utils/validators.js';
 
@@ -13,50 +21,37 @@ const MONTH_NAMES = [
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
-/** Format a number as Indian Rupee string */
 function fmt(n) {
   return `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Format a Date as DD/MM/YYYY — falls back to createdAt if date is missing */
 function fmtDate(d, fallback) {
   const target = d || fallback;
   if (!target) return '—';
   return new Date(target).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
-/** Pad a string to a fixed width, truncating with … if too long */
 function pad(str, width) {
   const s = String(str ?? '');
   if (s.length > width) return s.slice(0, width - 1) + '…';
   return s.padEnd(width);
 }
 
-/** Build a table row from columns and widths */
 function row(cols, widths) {
   return cols.map((c, i) => pad(c, widths[i])).join(' │ ');
 }
 
-/** Build a separator line */
 function sep(widths) {
   return widths.map(w => '─'.repeat(w)).join('─┼─');
 }
 
-/** Build a full ASCII table */
 function table(headers, widths, dataRows) {
-  const lines = [
-    row(headers, widths),
-    sep(widths),
-    ...dataRows.map(cols => row(cols, widths)),
-  ];
-  return lines.join('\n');
+  return [row(headers, widths), sep(widths), ...dataRows.map(cols => row(cols, widths))].join('\n');
 }
 
-/** Render a simple progress bar (width = 20 chars) */
 function progressBar(pct, width = 20) {
   const filled = Math.round(Math.min(pct, 100) / 100 * width);
-  const bar    = '█'.repeat(filled) + '░'.repeat(width - filled);
-  return `[${bar}] ${pct.toFixed(1)}%`;
+  return `[${'█'.repeat(filled)}${'░'.repeat(width - filled)}] ${pct.toFixed(1)}%`;
 }
 
 // ── FinanceService ────────────────────────────────────────────────────────────
@@ -91,17 +86,13 @@ class FinanceService {
     const widths  = [22, 12, 14, 12, 8];
     const headers = ['Name', 'Amount', 'Category', 'Date', 'ID…'];
     const data    = rows.map(r => [
-      r.name,
-      fmt(r.amount),
-      r.category || 'General',
-      fmtDate(r.date, r.createdAt),
-      String(r._id).slice(-6),
+      r.name, fmt(r.amount), r.category || 'General',
+      fmtDate(r.date, r.createdAt), String(r._id).slice(-6),
     ]);
 
     const totalPages = Math.ceil(total / limit);
     const pagination = totalPages > 1
-      ? `  Page ${page}/${totalPages} — showing ${rows.length} of ${total} records\n`
-      : '';
+      ? `  Page ${page}/${totalPages} — showing ${rows.length} of ${total} records\n` : '';
 
     return `\n📋 Expenses (${rows.length} shown, ${total} total):\n${table(headers, widths, data)}\n${pagination}`;
   }
@@ -112,14 +103,7 @@ class FinanceService {
 
     const widths  = [18, 14, 7, 14, 14];
     const headers = ['Category', 'Total', 'Count', 'Average', 'Max'];
-    const data    = rows.map(r => [
-      r._id || 'General',
-      fmt(r.total),
-      r.count,
-      fmt(r.avg),
-      fmt(r.max),
-    ]);
-
+    const data    = rows.map(r => [r._id || 'General', fmt(r.total), r.count, fmt(r.avg), fmt(r.max)]);
     return `\n📊 Expense by Category:\n${table(headers, widths, data)}\n`;
   }
 
@@ -129,18 +113,12 @@ class FinanceService {
 
     const widths  = [22, 12, 14, 12];
     const headers = ['Name', 'Amount', 'Category', 'Date'];
-    const data    = rows.map(r => [
-      r.name,
-      fmt(r.amount),
-      r.category || 'General',
-      fmtDate(r.date, r.createdAt),
-    ]);
-
+    const data    = rows.map(r => [r.name, fmt(r.amount), r.category || 'General', fmtDate(r.date, r.createdAt)]);
     return `\n🏆 Top Expenses:\n${table(headers, widths, data)}\n`;
   }
 
-  async getExpenseById({ id }) {
-    const r = await expenseModel.getById({ id });
+  async getExpenseById(args) {
+    const r = await expenseModel.getById(args);
     return (
       `\n📄 Expense Detail:\n` +
       `   ID          : ${r._id}\n` +
@@ -183,17 +161,13 @@ class FinanceService {
     const widths  = [22, 12, 14, 12, 8];
     const headers = ['Name', 'Amount', 'Source', 'Date', 'ID…'];
     const data    = rows.map(r => [
-      r.name,
-      fmt(r.amount),
-      r.source || 'Other',
-      fmtDate(r.date, r.createdAt),
-      String(r._id).slice(-6),
+      r.name, fmt(r.amount), r.source || 'Other',
+      fmtDate(r.date, r.createdAt), String(r._id).slice(-6),
     ]);
 
     const totalPages = Math.ceil(total / limit);
     const pagination = totalPages > 1
-      ? `  Page ${page}/${totalPages} — showing ${rows.length} of ${total} records\n`
-      : '';
+      ? `  Page ${page}/${totalPages} — showing ${rows.length} of ${total} records\n` : '';
 
     return `\n💰 Incomes (${rows.length} shown, ${total} total):\n${table(headers, widths, data)}\n${pagination}`;
   }
@@ -204,19 +178,12 @@ class FinanceService {
 
     const widths  = [18, 14, 7, 14, 14];
     const headers = ['Source', 'Total', 'Count', 'Average', 'Max'];
-    const data    = rows.map(r => [
-      r._id || 'Other',
-      fmt(r.total),
-      r.count,
-      fmt(r.avg),
-      fmt(r.max),
-    ]);
-
+    const data    = rows.map(r => [r._id || 'Other', fmt(r.total), r.count, fmt(r.avg), fmt(r.max)]);
     return `\n📊 Income by Source:\n${table(headers, widths, data)}\n`;
   }
 
-  async getIncomeById({ id }) {
-    const r = await incomeModel.getById({ id });
+  async getIncomeById(args) {
+    const r = await incomeModel.getById(args);
     return (
       `\n📄 Income Detail:\n` +
       `   ID          : ${r._id}\n` +
@@ -239,12 +206,10 @@ class FinanceService {
       incomeModel.getTotal(args),
       expenseModel.getTotal(args),
     ]);
-    const balance    = incData.total - expData.total;
-    const sign       = balance >= 0 ? '🟢' : '🔴';
-    const savingsRate = incData.total > 0
-      ? ((balance / incData.total) * 100).toFixed(1)
-      : '0.0';
-    const range = args?.from && args?.to ? ` (${args.from} → ${args.to})` : '';
+    const balance     = incData.total - expData.total;
+    const sign        = balance >= 0 ? '🟢' : '🔴';
+    const savingsRate = incData.total > 0 ? ((balance / incData.total) * 100).toFixed(1) : '0.0';
+    const range       = args?.from && args?.to ? ` (${args.from} → ${args.to})` : '';
 
     return (
       `\n💼 Financial Summary${range}:\n` +
@@ -262,10 +227,8 @@ class FinanceService {
       expenseModel.getTotal(args),
     ]);
     const balance     = incData.total - expData.total;
-    const savingsRate = incData.total > 0
-      ? ((balance / incData.total) * 100).toFixed(1)
-      : '0.0';
-    const range = args?.from && args?.to ? ` (${args.from} → ${args.to})` : '';
+    const savingsRate = incData.total > 0 ? ((balance / incData.total) * 100).toFixed(1) : '0.0';
+    const range       = args?.from && args?.to ? ` (${args.from} → ${args.to})` : '';
 
     return (
       `\n📈 Savings Rate${range}:\n` +
@@ -280,11 +243,12 @@ class FinanceService {
   // REPORTS
   // ════════════════════════════════════════════════════════════════════════════
 
-  async getMonthlySummary({ year } = {}) {
-    const y = year || new Date().getFullYear();
+  async getMonthlySummary(args = {}) {
+    const y = args.year || new Date().getFullYear();
+    const userId = args.userId;
     const [expRows, incRows] = await Promise.all([
-      expenseModel.getMonthlySummary({ year: y }),
-      incomeModel.getMonthlySummary({ year: y }),
+      expenseModel.getMonthlySummary({ userId, year: y }),
+      incomeModel.getMonthlySummary({ userId, year: y }),
     ]);
 
     const map = {};
@@ -303,46 +267,34 @@ class FinanceService {
     const widths  = [16, 14, 14, 14];
     const headers = ['Month', 'Income', 'Expense', 'Balance'];
     const data    = keys.map(k => {
-      const d   = map[k];
-      const inc = d.income  ?? 0;
-      const exp = d.expense ?? 0;
+      const d = map[k];
+      const inc = d.income ?? 0, exp = d.expense ?? 0;
       return [`${MONTH_NAMES[d.month]} ${d.year}`, fmt(inc), fmt(exp), fmt(inc - exp)];
     });
 
-    // Totals row
     const totInc = keys.reduce((s, k) => s + (map[k].income  ?? 0), 0);
     const totExp = keys.reduce((s, k) => s + (map[k].expense ?? 0), 0);
-    const totBal = totInc - totExp;
     data.push(['─'.repeat(16), '─'.repeat(14), '─'.repeat(14), '─'.repeat(14)]);
-    data.push(['TOTAL', fmt(totInc), fmt(totExp), fmt(totBal)]);
+    data.push(['TOTAL', fmt(totInc), fmt(totExp), fmt(totInc - totExp)]);
 
     return `\n📅 Monthly Summary — ${y}:\n${table(headers, widths, data)}\n`;
   }
 
-  async getFullReport({ year } = {}) {
-    const y = year || new Date().getFullYear();
-    const { from, to } = { from: `${y}-01-01`, to: `${y}-12-31` };
+  async getFullReport(args = {}) {
+    const y    = args.year || new Date().getFullYear();
+    const from = `${y}-01-01`, to = `${y}-12-31`;
+    const uid  = args.userId;
 
     const [balance, monthly, catBreak, srcBreak, topExp] = await Promise.all([
-      this.getMoneyBalance({ from, to }),
-      this.getMonthlySummary({ year: y }),
-      this.expenseCategoryBreakdown({ from, to }),
-      this.incomeSourceBreakdown({ from, to }),
-      this.getTopExpenses({ from, to, limit: 5 }),
+      this.getMoneyBalance({ userId: uid, from, to }),
+      this.getMonthlySummary({ userId: uid, year: y }),
+      this.expenseCategoryBreakdown({ userId: uid, from, to }),
+      this.incomeSourceBreakdown({ userId: uid, from, to }),
+      this.getTopExpenses({ userId: uid, from, to, limit: 5 }),
     ]);
 
     const line = '═'.repeat(62);
-    return (
-      `\n${line}\n` +
-      `  📑  FULL FINANCIAL REPORT — ${y}\n` +
-      `${line}\n` +
-      balance  + '\n' +
-      monthly  + '\n' +
-      catBreak + '\n' +
-      srcBreak + '\n' +
-      topExp   + '\n' +
-      `${line}\n`
-    );
+    return `\n${line}\n  📑  FULL FINANCIAL REPORT — ${y}\n${line}\n${balance}\n${monthly}\n${catBreak}\n${srcBreak}\n${topExp}\n${line}\n`;
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -353,26 +305,22 @@ class FinanceService {
     return await budgetModel.set(args);
   }
 
-  async checkBudget({ month } = {}) {
+  async checkBudget(args = {}) {
     const now = new Date();
-    const m   = month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const m   = args.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-    const budget = await budgetModel.get({ month: m });
-    if (!budget) {
-      return `⚠️  No budget set for ${m}.\n   Tip: "Set budget ₹20000 for ${m}"`;
-    }
+    const budget = await budgetModel.get({ userId: args.userId, month: m });
+    if (!budget) return `⚠️  No budget set for ${m}.\n   Tip: "Set budget ₹20000 for ${m}"`;
 
-    const { from, to }    = monthToDateRange(m);
-    const { total: spent } = await expenseModel.getTotal({ from, to });
+    const { from, to }     = monthToDateRange(m);
+    const { total: spent } = await expenseModel.getTotal({ userId: args.userId, from, to });
 
     const remaining = budget.amount - spent;
     const pct       = budget.amount > 0 ? (spent / budget.amount) * 100 : 0;
     const alertAt   = budget.alertAt ?? 80;
-
-    let status;
-    if (pct >= 100)     status = '🔴 Over budget';
-    else if (pct >= alertAt) status = `🟡 Warning — past ${alertAt}% threshold`;
-    else                status = '🟢 Under budget';
+    const status    = pct >= 100 ? '🔴 Over budget'
+                    : pct >= alertAt ? `🟡 Warning — past ${alertAt}% threshold`
+                    : '🟢 Under budget';
 
     return (
       `\n🎯 Budget Check — ${m}:\n` +
@@ -388,14 +336,13 @@ class FinanceService {
     return await budgetModel.delete(args);
   }
 
-  async listBudgets() {
-    const rows = await budgetModel.get({});
+  async listBudgets(args) {
+    const rows = await budgetModel.get(args);
     if (!rows.length) return '📭 No budgets set.';
 
     const widths  = [10, 16, 10];
     const headers = ['Month', 'Budget', 'Alert At'];
     const data    = rows.map(r => [r.month, fmt(r.amount), `${r.alertAt ?? 80}%`]);
-
     return `\n🎯 Monthly Budgets:\n${table(headers, widths, data)}\n`;
   }
 
@@ -413,47 +360,33 @@ class FinanceService {
 
     const widths  = [20, 10, 10, 12, 12];
     const headers = ['Name', 'Amount', 'Type', 'Frequency', 'Next Due'];
-    const data    = rows.map(r => [
-      r.name,
-      fmt(r.amount),
-      r.type,
-      r.frequency,
-      fmtDate(r.nextDue),
-    ]);
-
+    const data    = rows.map(r => [r.name, fmt(r.amount), r.type, r.frequency, fmtDate(r.nextDue)]);
     return `\n🔁 Recurring Transactions:\n${table(headers, widths, data)}\n`;
   }
 
-  async getDueRecurring() {
-    const rows = await recurringModel.getDue();
+  async getDueRecurring(args) {
+    const rows = await recurringModel.getDue(args.userId);
     if (!rows.length) return '✅ No recurring transactions are due right now.';
 
-    const widths  = [20, 10, 10, 12, 8];
-    const headers = ['Name', 'Amount', 'Type', 'Frequency', 'ID…'];
-    const data    = rows.map(r => [
-      r.name,
-      fmt(r.amount),
-      r.type,
-      r.frequency,
-      String(r._id).slice(-6),
-    ]);
+    const widths  = [20, 10, 10, 12, 26];
+    const headers = ['Name', 'Amount', 'Type', 'Frequency', 'Full ID'];
+    const data    = rows.map(r => [r.name, fmt(r.amount), r.type, r.frequency, String(r._id)]);
 
     return (
       `\n⏰ Due Recurring Transactions (${rows.length}):\n` +
       `${table(headers, widths, data)}\n` +
-      `\n  Tip: Say "post recurring <ID>" to record one as a transaction.\n`
+      `\n  Tip: Say "post recurring <Full ID>" to record one as a transaction.\n`
     );
   }
 
-  async postRecurring({ id }) {
-    // Use findById which handles both full ObjectId and last-6 suffix
-    const rec = await recurringModel.findById(id);
-    if (!rec) return `❌ Recurring item "${id}" not found. Use "list recurring" to see IDs.`;
+  async postRecurring(args) {
+    const rec = await recurringModel.findById(args.userId, args.id);
+    if (!rec) return `❌ Recurring item "${args.id}" not found. Use "list recurring" to see IDs.`;
 
-    // Post as actual transaction
     let result;
     if (rec.type === 'expense') {
       result = await expenseModel.add({
+        userId:      args.userId,
         name:        rec.name,
         amount:      rec.amount,
         category:    rec.category,
@@ -461,6 +394,7 @@ class FinanceService {
       });
     } else {
       result = await incomeModel.add({
+        userId:      args.userId,
         name:        rec.name,
         amount:      rec.amount,
         source:      rec.source,
@@ -472,56 +406,52 @@ class FinanceService {
     return `${result}\n🔁 Next due: ${fmtDate(nextDue)}`;
   }
 
-  async deactivateRecurring({ id }) {
-    return await recurringModel.deactivate(id);
+  async deactivateRecurring(args) {
+    return await recurringModel.deactivate(args.userId, args.id);
   }
 
-  async reactivateRecurring({ id }) {
-    return await recurringModel.reactivate(id);
+  async reactivateRecurring(args) {
+    return await recurringModel.reactivate(args.userId, args.id);
   }
 
   async updateRecurring(args) {
     return await recurringModel.update(args);
   }
 
-  async deleteRecurring({ id }) {
-    return await recurringModel.delete(id);
+  async deleteRecurring(args) {
+    return await recurringModel.delete(args.userId, args.id);
   }
 
   // ════════════════════════════════════════════════════════════════════════════
   // SEARCH
   // ════════════════════════════════════════════════════════════════════════════
 
-  async searchTransactions({ query, limit = 10 }) {
-    if (!query?.trim()) return '⚠️  Please provide a search query.';
+  async searchTransactions(args) {
+    if (!args.query?.trim()) return '⚠️  Please provide a search query.';
 
     const [expResult, incResult] = await Promise.all([
-      expenseModel.getAll({ search: query, limit }),
-      incomeModel.getAll({ search: query, limit }),
+      expenseModel.getAll({ userId: args.userId, search: args.query, limit: args.limit || 10 }),
+      incomeModel.getAll({ userId: args.userId, search: args.query, limit: args.limit || 10 }),
     ]);
 
     const expenses = expResult.rows;
     const incomes  = incResult.rows;
 
-    if (!expenses.length && !incomes.length) {
-      return `🔍 No results found for "${query}".`;
-    }
+    if (!expenses.length && !incomes.length) return `🔍 No results found for "${args.query}".`;
 
-    let out = `\n🔍 Search results for "${query}":\n`;
-
+    let out = `\n🔍 Search results for "${args.query}":\n`;
     if (expenses.length) {
       out += `\n  Expenses (${expenses.length}):\n`;
       expenses.forEach(r => {
-        out += `    • ${r.name} — ${fmt(r.amount)} [${r.category || 'General'}] on ${fmtDate(r.date, r.createdAt)}  ID: …${String(r._id).slice(-6)}\n`;
+        out += `    • ${r.name} — ${fmt(r.amount)} [${r.category || 'General'}] on ${fmtDate(r.date, r.createdAt)}  ID: ${r._id}\n`;
       });
     }
     if (incomes.length) {
       out += `\n  Incomes (${incomes.length}):\n`;
       incomes.forEach(r => {
-        out += `    • ${r.name} — ${fmt(r.amount)} [${r.source || 'Other'}] on ${fmtDate(r.date, r.createdAt)}  ID: …${String(r._id).slice(-6)}\n`;
+        out += `    • ${r.name} — ${fmt(r.amount)} [${r.source || 'Other'}] on ${fmtDate(r.date, r.createdAt)}  ID: ${r._id}\n`;
       });
     }
-
     return out;
   }
 
@@ -529,17 +459,53 @@ class FinanceService {
   // EXPORT
   // ════════════════════════════════════════════════════════════════════════════
 
-  async exportTransactions({ format = 'csv', from, to } = {}) {
+  async exportTransactions(args) {
     const [expenses, incomes] = await Promise.all([
-      expenseModel.exportAll({ from, to }),
-      incomeModel.exportAll({ from, to }),
+      expenseModel.exportAll({ userId: args.userId, from: args.from, to: args.to }),
+      incomeModel.exportAll({ userId: args.userId, from: args.from, to: args.to }),
     ]);
 
-    if (!expenses.length && !incomes.length) {
-      return '📭 No transactions to export.';
-    }
+    if (!expenses.length && !incomes.length) return '📭 No transactions to export.';
+    return await exportData({ expenses, incomes, format: args.format || 'csv', from: args.from, to: args.to });
+  }
 
-    return await exportData({ expenses, incomes, format, from, to });
+  // ════════════════════════════════════════════════════════════════════════════
+  // PROFILE (Feature 1)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  async getProfile(args) {
+    const user = await userModel.findById(String(args.userId));
+    if (!user) return '❌ User not found.';
+
+    const [expCount, incCount] = await Promise.all([
+      expenseModel.countByUser(args.userId),
+      incomeModel.countByUser(args.userId),
+    ]);
+
+    return (
+      `\n👤 Your Profile:\n` +
+      `   Name            : ${user.name}\n` +
+      `   Email           : ${user.email}\n` +
+      `   Account created : ${fmtDate(user.createdAt)}\n` +
+      `   Total expenses  : ${expCount} transaction(s)\n` +
+      `   Total incomes   : ${incCount} transaction(s)\n`
+    );
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // CHANGE PASSWORD (Feature 2)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  async changePassword(args) {
+    return await authService.changePassword(args);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // DELETE ACCOUNT (Feature 3)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  async deleteAccount(args) {
+    return await authService.deleteAccount(args);
   }
 }
 

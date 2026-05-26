@@ -1,9 +1,17 @@
+/**
+ * Income model — Fix 1: All queries now scoped by userId.
+ * Cleanup 4: Uses parseSafeDate / endOfDay instead of string interpolation.
+ * Cleanup 1: validateDescription enforces 500-char limit.
+ */
 import { ObjectId } from 'mongodb';
 import dbConnection from '../config/database.js';
 import {
   validateName,
   validateAmount,
   validateObjectId,
+  validateDescription,
+  parseSafeDate,
+  endOfDay,
 } from '../utils/validators.js';
 
 class IncomeModel {
@@ -16,22 +24,20 @@ class IncomeModel {
   }
 
   // ── Add ──────────────────────────────────────────────────────────────────
-  /**
-   * @param {{ name, amount, source?, description?, date? }} args
-   * date: optional ISO date string for recording past income (defaults to now)
-   */
-  async add({ name, amount, source = 'Other', description = '', date }) {
+  async add({ userId, name, amount, source = 'Other', description = '', date }) {
+    if (!userId) throw new Error('userId is required.');
     const validName   = validateName(name);
     const validAmount = validateAmount(amount);
+    const validDesc   = validateDescription(description);
 
-    const txDate = date ? new Date(date) : new Date();
-    if (isNaN(txDate.getTime())) throw new Error(`Invalid date: "${date}". Use YYYY-MM-DD.`);
+    const txDate = date ? parseSafeDate(date, 'transaction date') : new Date();
 
     const doc = {
+      userId:      new ObjectId(String(userId)),
       name:        validName,
       amount:      validAmount,
       source:      (source?.trim() || 'Other'),
-      description: (description?.trim() || ''),
+      description: validDesc,
       date:        txDate,
       createdAt:   new Date(),
     };
@@ -41,30 +47,31 @@ class IncomeModel {
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
-  async delete({ id }) {
+  async delete({ userId, id }) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'income ID');
-    const result = await this.collection.deleteOne({ _id: new ObjectId(id) });
+    const result = await this.collection.deleteOne({
+      _id:    new ObjectId(id),
+      userId: new ObjectId(String(userId)),
+    });
     if (result.deletedCount === 0) throw new Error(`Income with ID "${id}" not found.`);
     return `🗑️  Income deleted (ID: ${id}).`;
   }
 
   // ── Update ────────────────────────────────────────────────────────────────
-  async update({ id, name, amount, source, description, date }) {
+  async update({ userId, id, name, amount, source, description, date }) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'income ID');
 
     const update = { updatedAt: new Date() };
     if (name        !== undefined) update.name        = validateName(name);
     if (amount      !== undefined) update.amount      = validateAmount(amount);
     if (source      !== undefined) update.source      = source?.trim() || 'Other';
-    if (description !== undefined) update.description = description?.trim() || '';
-    if (date        !== undefined) {
-      const d = new Date(date);
-      if (isNaN(d.getTime())) throw new Error(`Invalid date: "${date}".`);
-      update.date = d;
-    }
+    if (description !== undefined) update.description = validateDescription(description);
+    if (date        !== undefined) update.date        = parseSafeDate(date, 'transaction date');
 
     const result = await this.collection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), userId: new ObjectId(String(userId)) },
       { $set: update }
     );
     if (result.matchedCount === 0) throw new Error(`Income with ID "${id}" not found.`);
@@ -72,10 +79,11 @@ class IncomeModel {
   }
 
   // ── Get total ─────────────────────────────────────────────────────────────
-  async getTotal({ from, to, source } = {}) {
-    const match = {};
+  async getTotal({ userId, from, to, source } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
     if (from && to) {
-      match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+      match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
     }
     if (source) match.source = source;
 
@@ -88,9 +96,10 @@ class IncomeModel {
   }
 
   // ── Get all ───────────────────────────────────────────────────────────────
-  async getAll({ from, to, source, search, limit = 20, page = 1 } = {}) {
-    const match = {};
-    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+  async getAll({ userId, from, to, source, search, limit = 20, page = 1 } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
+    if (from && to) match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
     if (source)     match.source = source;
     if (search)     match.$text  = { $search: search };
 
@@ -110,9 +119,10 @@ class IncomeModel {
   }
 
   // ── Source breakdown ──────────────────────────────────────────────────────
-  async getBySource({ from, to } = {}) {
-    const match = {};
-    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+  async getBySource({ userId, from, to } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
+    if (from && to) match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
 
     return await this.collection.aggregate([
       { $match: match },
@@ -130,12 +140,13 @@ class IncomeModel {
   }
 
   // ── Monthly summary ───────────────────────────────────────────────────────
-  async getMonthlySummary({ year } = {}) {
-    const match = {};
+  async getMonthlySummary({ userId, year } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
     if (year) {
       match.date = {
-        $gte: new Date(`${year}-01-01`),
-        $lte: new Date(`${year}-12-31T23:59:59.999Z`),
+        $gte: parseSafeDate(`${year}-01-01`),
+        $lte: endOfDay(`${year}-12-31`),
       };
     }
 
@@ -143,10 +154,7 @@ class IncomeModel {
       { $match: match },
       {
         $group: {
-          _id: {
-            year:  { $year: '$date' },
-            month: { $month: '$date' },
-          },
+          _id: { year: { $year: '$date' }, month: { $month: '$date' } },
           total: { $sum: '$amount' },
           count: { $sum: 1 },
         },
@@ -156,18 +164,35 @@ class IncomeModel {
   }
 
   // ── Get by ID ─────────────────────────────────────────────────────────────
-  async getById({ id }) {
+  async getById({ userId, id }) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'income ID');
-    const doc = await this.collection.findOne({ _id: new ObjectId(id) });
+    const doc = await this.collection.findOne({
+      _id:    new ObjectId(id),
+      userId: new ObjectId(String(userId)),
+    });
     if (!doc) throw new Error(`Income with ID "${id}" not found.`);
     return doc;
   }
 
+  // ── Count (for profile) ───────────────────────────────────────────────────
+  async countByUser(userId) {
+    if (!userId) return 0;
+    return await this.collection.countDocuments({ userId: new ObjectId(String(userId)) });
+  }
+
   // ── Export all ────────────────────────────────────────────────────────────
-  async exportAll({ from, to } = {}) {
-    const match = {};
-    if (from && to) match.date = { $gte: new Date(from), $lte: new Date(`${to}T23:59:59.999Z`) };
+  async exportAll({ userId, from, to } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
+    if (from && to) match.date = { $gte: parseSafeDate(from, 'from date'), $lte: endOfDay(to) };
     return await this.collection.find(match).sort({ date: -1 }).toArray();
+  }
+
+  // ── Delete all by user (for account deletion) ─────────────────────────────
+  async deleteAllByUser(userId) {
+    if (!userId) throw new Error('userId is required.');
+    return await this.collection.deleteMany({ userId: new ObjectId(String(userId)) });
   }
 }
 

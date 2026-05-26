@@ -4,8 +4,10 @@
  *
  * Token is stored at: ~/.financebot_session  (user's home directory)
  * The file is only readable by the current OS user (mode 0o600).
+ *
+ * Cleanup 2: removed unused `chmod` import.
  */
-import { readFile, writeFile, unlink, chmod } from 'node:fs/promises';
+import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 

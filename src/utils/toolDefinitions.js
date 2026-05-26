@@ -1,6 +1,9 @@
 /**
- * OpenAI / Groq function-calling tool definitions.
+ * Groq / OpenAI function-calling tool definitions.
  * Every tool here must have a matching case in agent.js handleToolCall().
+ *
+ * NOTE: userId is NEVER included in these schemas — it is injected server-side
+ * by agent.js from the authenticated session. The LLM never sees or sends it.
  */
 export const toolDefinitions = [
 
@@ -15,10 +18,10 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          name:        { type: 'string',  description: 'Short label (e.g. "Groceries", "Uber ride")' },
+          name:        { type: 'string',  description: 'Short label (e.g. "Groceries", "Uber ride"). Max 200 chars.' },
           amount:      { type: 'number',  description: 'Amount in INR — must be positive' },
           category:    { type: 'string',  description: 'Category: Food, Transport, Rent, Entertainment, Health, Shopping, Utilities, Education, Other' },
-          description: { type: 'string',  description: 'Optional extra notes' },
+          description: { type: 'string',  description: 'Optional extra notes. Max 500 chars.' },
           date:        { type: 'string',  description: 'Transaction date in YYYY-MM-DD format. Defaults to today.' },
         },
         required: ['name', 'amount'],
@@ -146,10 +149,10 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          name:        { type: 'string',  description: 'Short label (e.g. "Salary May", "Freelance project")' },
+          name:        { type: 'string',  description: 'Short label (e.g. "Salary May", "Freelance project"). Max 200 chars.' },
           amount:      { type: 'number',  description: 'Amount in INR — must be positive' },
           source:      { type: 'string',  description: 'Source: Salary, Freelance, Business, Investment, Rental, Gift, Other' },
-          description: { type: 'string',  description: 'Optional extra notes' },
+          description: { type: 'string',  description: 'Optional extra notes. Max 500 chars.' },
           date:        { type: 'string',  description: 'Transaction date in YYYY-MM-DD format. Defaults to today.' },
         },
         required: ['name', 'amount'],
@@ -375,13 +378,13 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          name:        { type: 'string',  description: 'Label for the recurring item' },
+          name:        { type: 'string',  description: 'Label for the recurring item. Max 200 chars.' },
           amount:      { type: 'number',  description: 'Amount in INR' },
           type:        { type: 'string',  description: '"expense" or "income"' },
           frequency:   { type: 'string',  description: '"daily", "weekly", "monthly", or "yearly"' },
           category:    { type: 'string',  description: 'Category (for expenses)' },
           source:      { type: 'string',  description: 'Source (for income)' },
-          description: { type: 'string',  description: 'Optional notes' },
+          description: { type: 'string',  description: 'Optional notes. Max 500 chars.' },
           startDate:   { type: 'string',  description: 'First occurrence date YYYY-MM-DD. Defaults to today.' },
         },
         required: ['name', 'amount', 'type', 'frequency'],
@@ -417,7 +420,7 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Full MongoDB ObjectId or last-6 chars of the recurring item' },
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId of the recurring item' },
         },
         required: ['id'],
       },
@@ -431,7 +434,7 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId of the recurring item' },
         },
         required: ['id'],
       },
@@ -445,7 +448,7 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId of the recurring item' },
         },
         required: ['id'],
       },
@@ -459,7 +462,7 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          id:          { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+          id:          { type: 'string', description: 'Full 24-character MongoDB ObjectId of the recurring item' },
           name:        { type: 'string' },
           amount:      { type: 'number' },
           frequency:   { type: 'string', description: '"daily", "weekly", "monthly", or "yearly"' },
@@ -479,7 +482,7 @@ export const toolDefinitions = [
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId of the recurring item' },
         },
         required: ['id'],
       },
@@ -516,6 +519,47 @@ export const toolDefinitions = [
           from:   { type: 'string',  description: 'Start date YYYY-MM-DD (optional)' },
           to:     { type: 'string',  description: 'End date YYYY-MM-DD (optional)' },
         },
+      },
+    },
+  },
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ACCOUNT / PROFILE  (Feature 1, 2, 3)
+  // ══════════════════════════════════════════════════════════════════════════
+  {
+    type: 'function',
+    function: {
+      name: 'getProfile',
+      description: 'Show the logged-in user\'s profile: name, email, account creation date, and transaction counts. Use when the user asks "who am I", "show my profile", or "what account am I using".',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'changePassword',
+      description: 'Change the logged-in user\'s password. Requires the current password for verification. The session will be invalidated and the user must log in again.',
+      parameters: {
+        type: 'object',
+        properties: {
+          currentPassword: { type: 'string', description: 'The user\'s current password' },
+          newPassword:     { type: 'string', description: 'The new password (minimum 8 characters)' },
+        },
+        required: ['currentPassword', 'newPassword'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'deleteAccount',
+      description: '⚠️ IRREVERSIBLE. Permanently delete the account and ALL associated data (expenses, incomes, budgets, recurring). Requires the user to type the exact phrase "DELETE MY ACCOUNT" as confirmation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          confirmationPhrase: { type: 'string', description: 'Must be exactly: DELETE MY ACCOUNT' },
+        },
+        required: ['confirmationPhrase'],
       },
     },
   },

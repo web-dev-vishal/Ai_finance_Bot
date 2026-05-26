@@ -1,5 +1,9 @@
 /**
  * Shared validation helpers — used by all models.
+ *
+ * Cleanup 1: validateName now caps at 200 chars.
+ * Cleanup 2: Removed unused exports (currentMonthRange, validateDateRange).
+ * Cleanup 4: Added parseSafeDate() helper for safe date construction.
  */
 
 /**
@@ -17,6 +21,7 @@ export function validateAmount(amount) {
 
 /**
  * Validates and trims a required string name.
+ * Max 200 characters (Cleanup 1).
  * @param {*} name
  * @returns {string}
  */
@@ -24,7 +29,26 @@ export function validateName(name) {
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw new Error('Name is required and must be a non-empty string.');
   }
-  return name.trim();
+  const trimmed = name.trim();
+  if (trimmed.length > 200) {
+    throw new Error('Name must be 200 characters or fewer.');
+  }
+  return trimmed;
+}
+
+/**
+ * Validates and trims an optional description/notes field.
+ * Max 500 characters (Cleanup 1).
+ * @param {string|undefined} text
+ * @returns {string}
+ */
+export function validateDescription(text) {
+  if (!text) return '';
+  const trimmed = String(text).trim();
+  if (trimmed.length > 500) {
+    throw new Error('Description must be 500 characters or fewer.');
+  }
+  return trimmed;
 }
 
 /**
@@ -43,44 +67,38 @@ export function validateMonth(month) {
 }
 
 /**
- * Validates a date string (YYYY-MM-DD or ISO).
- * Returns a Date object.
- * @param {string} dateStr
+ * Safely parse a date string (YYYY-MM-DD or ISO).
+ * Throws a clear error if the string is not a valid date.
+ * Use this instead of `new Date(str)` directly (Cleanup 4).
+ * @param {string} str
  * @param {string} [label='date']
  * @returns {Date}
  */
-export function validateDate(dateStr, label = 'date') {
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) throw new Error(`Invalid ${label}: "${dateStr}". Use YYYY-MM-DD format.`);
+export function parseSafeDate(str, label = 'date') {
+  if (!str || typeof str !== 'string') {
+    throw new Error(`Invalid ${label}: value is required.`);
+  }
+  // Accept YYYY-MM-DD or full ISO strings
+  if (!/^\d{4}-\d{2}-\d{2}/.test(str)) {
+    throw new Error(`Invalid ${label}: "${str}". Use YYYY-MM-DD format.`);
+  }
+  const d = new Date(str);
+  if (isNaN(d.getTime())) {
+    throw new Error(`Invalid ${label}: "${str}". Use YYYY-MM-DD format.`);
+  }
   return d;
 }
 
 /**
- * Validates a from/to date range.
- * @param {string} from
- * @param {string} to
- * @returns {{ from: Date, to: Date }}
+ * Build an end-of-day Date for a YYYY-MM-DD string.
+ * Replaces the unsafe `new Date(\`${to}T23:59:59.999Z\`)` pattern (Cleanup 4).
+ * @param {string} dateStr  YYYY-MM-DD
+ * @returns {Date}
  */
-export function validateDateRange(from, to) {
-  const f = validateDate(from, '"from" date');
-  const t = validateDate(to,   '"to" date');
-  if (f > t) throw new Error('"from" date cannot be after "to" date.');
-  return { from: f, to: t };
-}
-
-/**
- * Returns the first and last day of the current month as ISO date strings (YYYY-MM-DD).
- * Uses local time to avoid UTC-offset issues.
- * @returns {{ from: string, to: string }}
- */
-export function currentMonthRange() {
-  const now   = new Date();
-  const year  = now.getFullYear();
-  const month = now.getMonth(); // 0-indexed
-  const from  = `${year}-${String(month + 1).padStart(2, '0')}-01`;
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  const to    = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-  return { from, to };
+export function endOfDay(dateStr) {
+  const d = parseSafeDate(dateStr, 'end date');
+  d.setUTCHours(23, 59, 59, 999);
+  return d;
 }
 
 /**
@@ -109,4 +127,20 @@ export function validateObjectId(id, label = 'ID') {
     throw new Error(`Invalid ${label}. Must be a 24-character hex string.`);
   }
   return id;
+}
+
+/**
+ * Validates an email address format.
+ * @param {string} email
+ * @returns {string} normalised lowercase email
+ */
+export function validateEmail(email) {
+  if (!email || typeof email !== 'string' || !email.trim()) {
+    throw new Error('Email is required.');
+  }
+  const trimmed = email.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    throw new Error('Invalid email format. Please enter a valid email address.');
+  }
+  return trimmed;
 }

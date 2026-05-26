@@ -1,10 +1,12 @@
 /**
- * User model — stores registered users with hashed passwords.
- * Passwords are hashed with bcryptjs (12 rounds) before storage.
+ * User model.
+ * Fix 3: Email format validated with regex before saving.
+ * Feature 2 & 3: changePassword and deleteUser methods added.
  */
 import { ObjectId } from 'mongodb';
 import bcrypt from 'bcryptjs';
 import dbConnection from '../config/database.js';
+import { validateEmail } from '../utils/validators.js';
 
 const SALT_ROUNDS = 12;
 
@@ -18,20 +20,13 @@ class UserModel {
   }
 
   // ── Register ──────────────────────────────────────────────────────────────
-  /**
-   * Create a new user. Throws if email already exists.
-   * @param {{ name: string, email: string, password: string }} args
-   * @returns {Promise<{ _id, name, email, createdAt }>}
-   */
   async create({ name, email, password }) {
     if (!name?.trim())  throw new Error('Name is required.');
-    if (!email?.trim()) throw new Error('Email is required.');
-    if (!password)      throw new Error('Password is required.');
-    if (password.length < 8) throw new Error('Password must be at least 8 characters.');
+    if (password?.length < 8) throw new Error('Password must be at least 8 characters.');
 
-    const normalizedEmail = email.trim().toLowerCase();
+    // Fix 3: validate email format
+    const normalizedEmail = validateEmail(email);
 
-    // Check for duplicate
     const existing = await this.collection.findOne({ email: normalizedEmail });
     if (existing) throw new Error(`An account with email "${normalizedEmail}" already exists.`);
 
@@ -63,22 +58,16 @@ class UserModel {
   }
 
   // ── Verify password ───────────────────────────────────────────────────────
-  /**
-   * Returns the user document (without passwordHash) if credentials are valid.
-   * Returns null if email not found or password is wrong.
-   */
   async verifyCredentials(email, password) {
     const user = await this.findByEmail(email);
     if (!user) return null;
-
     const match = await bcrypt.compare(password, user.passwordHash);
     if (!match) return null;
-
     const { passwordHash: _ph, ...safe } = user;
     return safe;
   }
 
-  // ── Update password ───────────────────────────────────────────────────────
+  // ── Update password (used by forgotPassword reset flow) ───────────────────
   async updatePassword(userId, newPassword) {
     if (!newPassword || newPassword.length < 8) {
       throw new Error('New password must be at least 8 characters.');
@@ -88,6 +77,36 @@ class UserModel {
       { _id: new ObjectId(userId) },
       { $set: { passwordHash, updatedAt: new Date() } }
     );
+  }
+
+  // ── Change password (Feature 2: verify current, set new) ─────────────────
+  async changePassword(userId, currentPassword, newPassword) {
+    if (!currentPassword) throw new Error('Current password is required.');
+    if (!newPassword || newPassword.length < 8) {
+      throw new Error('New password must be at least 8 characters.');
+    }
+
+    const user = await this.collection.findOne({ _id: new ObjectId(userId) });
+    if (!user) throw new Error('User not found.');
+
+    const match = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!match) throw new Error('Current password is incorrect.');
+
+    if (currentPassword === newPassword) {
+      throw new Error('New password must be different from the current password.');
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    await this.collection.updateOne(
+      { _id: new ObjectId(userId) },
+      { $set: { passwordHash, updatedAt: new Date() } }
+    );
+  }
+
+  // ── Delete user (Feature 3) ───────────────────────────────────────────────
+  async deleteUser(userId) {
+    if (!userId) throw new Error('userId is required.');
+    await this.collection.deleteOne({ _id: new ObjectId(userId) });
   }
 }
 

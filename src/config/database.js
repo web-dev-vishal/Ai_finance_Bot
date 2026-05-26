@@ -40,27 +40,27 @@ class DatabaseConnection {
     const users     = this.db.collection('users');
 
     await Promise.all([
-      // Expenses
-      expenses.createIndex({ date: -1 }),
-      expenses.createIndex({ createdAt: -1 }),
-      expenses.createIndex({ category: 1 }),
+      // Expenses — compound userId indexes (Fix 1)
+      expenses.createIndex({ userId: 1, date: -1 }),
+      expenses.createIndex({ userId: 1, createdAt: -1 }),
+      expenses.createIndex({ userId: 1, category: 1 }),
       expenses.createIndex({ name: 'text', description: 'text' }),
 
-      // Incomes
-      incomes.createIndex({ date: -1 }),
-      incomes.createIndex({ createdAt: -1 }),
-      incomes.createIndex({ source: 1 }),
+      // Incomes — compound userId indexes (Fix 1)
+      incomes.createIndex({ userId: 1, date: -1 }),
+      incomes.createIndex({ userId: 1, createdAt: -1 }),
+      incomes.createIndex({ userId: 1, source: 1 }),
       incomes.createIndex({ name: 'text', description: 'text' }),
 
-      // Budgets — one document per month
-      budgets.createIndex({ month: 1 }, { unique: true }),
+      // Budgets — compound unique [userId, month] (Fix 1)
+      budgets.createIndex({ userId: 1, month: 1 }, { unique: true }),
 
-      // Recurring
-      recurring.createIndex({ nextDue: 1 }),
-      recurring.createIndex({ active: 1 }),
-      recurring.createIndex({ type: 1 }),
+      // Recurring — compound userId indexes (Fix 1)
+      recurring.createIndex({ userId: 1, nextDue: 1 }),
+      recurring.createIndex({ userId: 1, active: 1 }),
+      recurring.createIndex({ userId: 1, type: 1 }),
 
-      // Users — unique email index
+      // Users
       users.createIndex({ email: 1 }, { unique: true }),
       users.createIndex({ createdAt: -1 }),
     ]);

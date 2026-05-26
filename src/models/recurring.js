@@ -1,15 +1,17 @@
+/**
+ * Recurring transaction model — Fix 1: All queries scoped by userId.
+ * Cleanup 3: findById no longer does a full collection scan for short IDs.
+ */
 import { ObjectId } from 'mongodb';
 import dbConnection from '../config/database.js';
-import { validateName, validateAmount, validateObjectId } from '../utils/validators.js';
+import {
+  validateName,
+  validateAmount,
+  validateObjectId,
+  validateDescription,
+  parseSafeDate,
+} from '../utils/validators.js';
 
-/**
- * Recurring transaction model.
- * Stores templates for transactions that repeat on a schedule.
- * The agent can list due recurring items and let the user confirm posting them.
- *
- * frequency: 'daily' | 'weekly' | 'monthly' | 'yearly'
- * type:      'expense' | 'income'
- */
 class RecurringModel {
   constructor() {
     this.collection = null;
@@ -19,9 +21,12 @@ class RecurringModel {
     this.collection = dbConnection.getDatabase().collection('recurring');
   }
 
-  async add({ name, amount, type, frequency, category, source, description, startDate }) {
+  // ── Add ──────────────────────────────────────────────────────────────────
+  async add({ userId, name, amount, type, frequency, category, source, description, startDate }) {
+    if (!userId) throw new Error('userId is required.');
     const validName   = validateName(name);
     const validAmount = validateAmount(amount);
+    const validDesc   = validateDescription(description);
 
     if (!['expense', 'income'].includes(type)) {
       throw new Error('Type must be "expense" or "income".');
@@ -30,17 +35,17 @@ class RecurringModel {
       throw new Error('Frequency must be daily, weekly, monthly, or yearly.');
     }
 
-    const start = startDate ? new Date(startDate) : new Date();
-    if (isNaN(start.getTime())) throw new Error(`Invalid startDate: "${startDate}".`);
+    const start = startDate ? parseSafeDate(startDate, 'startDate') : new Date();
 
     const doc = {
+      userId:      new ObjectId(String(userId)),
       name:        validName,
       amount:      validAmount,
       type,
       frequency,
       category:    type === 'expense' ? (category?.trim() || 'General') : undefined,
       source:      type === 'income'  ? (source?.trim()   || 'Other')   : undefined,
-      description: description?.trim() || '',
+      description: validDesc,
       startDate:   start,
       nextDue:     start,
       active:      true,
@@ -54,24 +59,26 @@ class RecurringModel {
     return `✅ Recurring ${type} added — ${doc.name} | ₹${doc.amount} | ${doc.frequency} | ID: ${result.insertedId}`;
   }
 
-  async list({ type, activeOnly = true } = {}) {
-    const match = {};
+  // ── List ──────────────────────────────────────────────────────────────────
+  async list({ userId, type, activeOnly = true } = {}) {
+    if (!userId) throw new Error('userId is required.');
+    const match = { userId: new ObjectId(String(userId)) };
     if (type)       match.type   = type;
     if (activeOnly) match.active = true;
     return await this.collection.find(match).sort({ nextDue: 1 }).toArray();
   }
 
-  async getDue() {
+  // ── Get due ───────────────────────────────────────────────────────────────
+  async getDue(userId) {
+    if (!userId) throw new Error('userId is required.');
     const now = new Date();
     return await this.collection
-      .find({ active: true, nextDue: { $lte: now } })
+      .find({ userId: new ObjectId(String(userId)), active: true, nextDue: { $lte: now } })
       .sort({ nextDue: 1 })
       .toArray();
   }
 
-  /**
-   * Advance the nextDue date after a recurring item is posted.
-   */
+  // ── Mark posted (advance nextDue) ─────────────────────────────────────────
   async markPosted(id) {
     validateObjectId(id, 'recurring ID');
     const item = await this.collection.findOne({ _id: new ObjectId(id) });
@@ -79,9 +86,9 @@ class RecurringModel {
 
     const next = new Date(item.nextDue);
     switch (item.frequency) {
-      case 'daily':   next.setDate(next.getDate() + 1);       break;
-      case 'weekly':  next.setDate(next.getDate() + 7);       break;
-      case 'monthly': next.setMonth(next.getMonth() + 1);     break;
+      case 'daily':   next.setDate(next.getDate() + 1);         break;
+      case 'weekly':  next.setDate(next.getDate() + 7);         break;
+      case 'monthly': next.setMonth(next.getMonth() + 1);       break;
       case 'yearly':  next.setFullYear(next.getFullYear() + 1); break;
     }
 
@@ -92,10 +99,9 @@ class RecurringModel {
     return next;
   }
 
-  /**
-   * Update fields of an existing recurring item (name, amount, frequency, category, source, description).
-   */
-  async update({ id, name, amount, frequency, category, source, description }) {
+  // ── Update ────────────────────────────────────────────────────────────────
+  async update({ userId, id, name, amount, frequency, category, source, description }) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'recurring ID');
 
     const upd = { updatedAt: new Date() };
@@ -109,55 +115,73 @@ class RecurringModel {
     }
     if (category    !== undefined) upd.category    = category?.trim() || 'General';
     if (source      !== undefined) upd.source      = source?.trim()   || 'Other';
-    if (description !== undefined) upd.description = description?.trim() || '';
+    if (description !== undefined) upd.description = validateDescription(description);
 
     const result = await this.collection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), userId: new ObjectId(String(userId)) },
       { $set: upd }
     );
     if (result.matchedCount === 0) throw new Error(`Recurring item "${id}" not found.`);
     return `✏️  Recurring item ${id} updated.`;
   }
 
-  async deactivate(id) {
+  // ── Deactivate ────────────────────────────────────────────────────────────
+  async deactivate(userId, id) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'recurring ID');
     const result = await this.collection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), userId: new ObjectId(String(userId)) },
       { $set: { active: false, updatedAt: new Date() } }
     );
     if (result.matchedCount === 0) throw new Error(`Recurring item "${id}" not found.`);
     return `⏸️  Recurring item ${id} deactivated.`;
   }
 
-  async reactivate(id) {
+  // ── Reactivate ────────────────────────────────────────────────────────────
+  async reactivate(userId, id) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'recurring ID');
     const result = await this.collection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), userId: new ObjectId(String(userId)) },
       { $set: { active: true, updatedAt: new Date() } }
     );
     if (result.matchedCount === 0) throw new Error(`Recurring item "${id}" not found.`);
     return `▶️  Recurring item ${id} reactivated.`;
   }
 
-  async delete(id) {
+  // ── Delete ────────────────────────────────────────────────────────────────
+  async delete(userId, id) {
+    if (!userId) throw new Error('userId is required.');
     validateObjectId(id, 'recurring ID');
-    const result = await this.collection.deleteOne({ _id: new ObjectId(id) });
+    const result = await this.collection.deleteOne({
+      _id:    new ObjectId(id),
+      userId: new ObjectId(String(userId)),
+    });
     if (result.deletedCount === 0) throw new Error(`Recurring item "${id}" not found.`);
     return `🗑️  Recurring item ${id} deleted.`;
   }
 
+  // ── Find by ID (Cleanup 3: no full-collection scan) ───────────────────────
   /**
-   * Find a recurring item by full ObjectId OR last-6 chars of ObjectId.
+   * Find a recurring item by full 24-char ObjectId.
+   * Short IDs are no longer supported — the LLM always receives full IDs.
    * Returns null if not found.
    */
-  async findById(id) {
-    // Try full ObjectId first
-    if (/^[a-f\d]{24}$/i.test(id)) {
-      return await this.collection.findOne({ _id: new ObjectId(id) });
+  async findById(userId, id) {
+    if (!userId) throw new Error('userId is required.');
+    if (!/^[a-f\d]{24}$/i.test(id)) {
+      throw new Error(`Invalid recurring ID "${id}". Please use the full 24-character ID shown in the list.`);
     }
-    // Fall back to last-6 suffix scan (small collection, acceptable)
-    const all = await this.collection.find({}).toArray();
-    return all.find(r => String(r._id).slice(-6) === id) ?? null;
+    return await this.collection.findOne({
+      _id:    new ObjectId(id),
+      userId: new ObjectId(String(userId)),
+    });
+  }
+
+  // ── Delete all by user (for account deletion) ─────────────────────────────
+  async deleteAllByUser(userId) {
+    if (!userId) throw new Error('userId is required.');
+    return await this.collection.deleteMany({ userId: new ObjectId(String(userId)) });
   }
 }
 

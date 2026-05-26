@@ -18,10 +18,11 @@ function fmt(n) {
   return `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Format a Date as DD/MM/YYYY */
-function fmtDate(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+/** Format a Date as DD/MM/YYYY — falls back to createdAt if date is missing */
+function fmtDate(d, fallback) {
+  const target = d || fallback;
+  if (!target) return '—';
+  return new Date(target).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 /** Pad a string to a fixed width, truncating with … if too long */
@@ -93,7 +94,7 @@ class FinanceService {
       r.name,
       fmt(r.amount),
       r.category || 'General',
-      fmtDate(r.date),
+      fmtDate(r.date, r.createdAt),
       String(r._id).slice(-6),
     ]);
 
@@ -132,10 +133,25 @@ class FinanceService {
       r.name,
       fmt(r.amount),
       r.category || 'General',
-      fmtDate(r.date),
+      fmtDate(r.date, r.createdAt),
     ]);
 
     return `\n🏆 Top Expenses:\n${table(headers, widths, data)}\n`;
+  }
+
+  async getExpenseById({ id }) {
+    const r = await expenseModel.getById({ id });
+    return (
+      `\n📄 Expense Detail:\n` +
+      `   ID          : ${r._id}\n` +
+      `   Name        : ${r.name}\n` +
+      `   Amount      : ${fmt(r.amount)}\n` +
+      `   Category    : ${r.category || 'General'}\n` +
+      `   Date        : ${fmtDate(r.date, r.createdAt)}\n` +
+      `   Description : ${r.description || '—'}\n` +
+      `   Created     : ${fmtDate(r.createdAt)}\n` +
+      (r.updatedAt ? `   Updated     : ${fmtDate(r.updatedAt)}\n` : '')
+    );
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -170,7 +186,7 @@ class FinanceService {
       r.name,
       fmt(r.amount),
       r.source || 'Other',
-      fmtDate(r.date),
+      fmtDate(r.date, r.createdAt),
       String(r._id).slice(-6),
     ]);
 
@@ -197,6 +213,21 @@ class FinanceService {
     ]);
 
     return `\n📊 Income by Source:\n${table(headers, widths, data)}\n`;
+  }
+
+  async getIncomeById({ id }) {
+    const r = await incomeModel.getById({ id });
+    return (
+      `\n📄 Income Detail:\n` +
+      `   ID          : ${r._id}\n` +
+      `   Name        : ${r.name}\n` +
+      `   Amount      : ${fmt(r.amount)}\n` +
+      `   Source      : ${r.source || 'Other'}\n` +
+      `   Date        : ${fmtDate(r.date, r.createdAt)}\n` +
+      `   Description : ${r.description || '—'}\n` +
+      `   Created     : ${fmtDate(r.createdAt)}\n` +
+      (r.updatedAt ? `   Updated     : ${fmtDate(r.updatedAt)}\n` : '')
+    );
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -415,9 +446,9 @@ class FinanceService {
   }
 
   async postRecurring({ id }) {
-    const item = await recurringModel.list({ activeOnly: false });
-    const rec  = item.find(r => String(r._id) === id || String(r._id).slice(-6) === id);
-    if (!rec) return `❌ Recurring item "${id}" not found.`;
+    // Use findById which handles both full ObjectId and last-6 suffix
+    const rec = await recurringModel.findById(id);
+    if (!rec) return `❌ Recurring item "${id}" not found. Use "list recurring" to see IDs.`;
 
     // Post as actual transaction
     let result;
@@ -443,6 +474,14 @@ class FinanceService {
 
   async deactivateRecurring({ id }) {
     return await recurringModel.deactivate(id);
+  }
+
+  async reactivateRecurring({ id }) {
+    return await recurringModel.reactivate(id);
+  }
+
+  async updateRecurring(args) {
+    return await recurringModel.update(args);
   }
 
   async deleteRecurring({ id }) {
@@ -473,13 +512,13 @@ class FinanceService {
     if (expenses.length) {
       out += `\n  Expenses (${expenses.length}):\n`;
       expenses.forEach(r => {
-        out += `    • ${r.name} — ${fmt(r.amount)} [${r.category || 'General'}] on ${fmtDate(r.date)}  ID: …${String(r._id).slice(-6)}\n`;
+        out += `    • ${r.name} — ${fmt(r.amount)} [${r.category || 'General'}] on ${fmtDate(r.date, r.createdAt)}  ID: …${String(r._id).slice(-6)}\n`;
       });
     }
     if (incomes.length) {
       out += `\n  Incomes (${incomes.length}):\n`;
       incomes.forEach(r => {
-        out += `    • ${r.name} — ${fmt(r.amount)} [${r.source || 'Other'}] on ${fmtDate(r.date)}  ID: …${String(r._id).slice(-6)}\n`;
+        out += `    • ${r.name} — ${fmt(r.amount)} [${r.source || 'Other'}] on ${fmtDate(r.date, r.createdAt)}  ID: …${String(r._id).slice(-6)}\n`;
       });
     }
 

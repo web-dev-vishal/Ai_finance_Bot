@@ -155,6 +155,14 @@ class IncomeModel {
     ]).toArray();
   }
 
+  // ── Get by ID ─────────────────────────────────────────────────────────────
+  async getById({ id }) {
+    validateObjectId(id, 'income ID');
+    const doc = await this.collection.findOne({ _id: new ObjectId(id) });
+    if (!doc) throw new Error(`Income with ID "${id}" not found.`);
+    return doc;
+  }
+
   // ── Export all ────────────────────────────────────────────────────────────
   async exportAll({ from, to } = {}) {
     const match = {};

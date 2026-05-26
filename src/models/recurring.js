@@ -92,6 +92,33 @@ class RecurringModel {
     return next;
   }
 
+  /**
+   * Update fields of an existing recurring item (name, amount, frequency, category, source, description).
+   */
+  async update({ id, name, amount, frequency, category, source, description }) {
+    validateObjectId(id, 'recurring ID');
+
+    const upd = { updatedAt: new Date() };
+    if (name        !== undefined) upd.name        = validateName(name);
+    if (amount      !== undefined) upd.amount      = validateAmount(amount);
+    if (frequency   !== undefined) {
+      if (!['daily', 'weekly', 'monthly', 'yearly'].includes(frequency)) {
+        throw new Error('Frequency must be daily, weekly, monthly, or yearly.');
+      }
+      upd.frequency = frequency;
+    }
+    if (category    !== undefined) upd.category    = category?.trim() || 'General';
+    if (source      !== undefined) upd.source      = source?.trim()   || 'Other';
+    if (description !== undefined) upd.description = description?.trim() || '';
+
+    const result = await this.collection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: upd }
+    );
+    if (result.matchedCount === 0) throw new Error(`Recurring item "${id}" not found.`);
+    return `✏️  Recurring item ${id} updated.`;
+  }
+
   async deactivate(id) {
     validateObjectId(id, 'recurring ID');
     const result = await this.collection.updateOne(
@@ -102,11 +129,35 @@ class RecurringModel {
     return `⏸️  Recurring item ${id} deactivated.`;
   }
 
+  async reactivate(id) {
+    validateObjectId(id, 'recurring ID');
+    const result = await this.collection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { active: true, updatedAt: new Date() } }
+    );
+    if (result.matchedCount === 0) throw new Error(`Recurring item "${id}" not found.`);
+    return `▶️  Recurring item ${id} reactivated.`;
+  }
+
   async delete(id) {
     validateObjectId(id, 'recurring ID');
     const result = await this.collection.deleteOne({ _id: new ObjectId(id) });
     if (result.deletedCount === 0) throw new Error(`Recurring item "${id}" not found.`);
     return `🗑️  Recurring item ${id} deleted.`;
+  }
+
+  /**
+   * Find a recurring item by full ObjectId OR last-6 chars of ObjectId.
+   * Returns null if not found.
+   */
+  async findById(id) {
+    // Try full ObjectId first
+    if (/^[a-f\d]{24}$/i.test(id)) {
+      return await this.collection.findOne({ _id: new ObjectId(id) });
+    }
+    // Fall back to last-6 suffix scan (small collection, acceptable)
+    const all = await this.collection.find({}).toArray();
+    return all.find(r => String(r._id).slice(-6) === id) ?? null;
   }
 }
 

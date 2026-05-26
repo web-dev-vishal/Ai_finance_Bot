@@ -64,6 +64,7 @@ function printHelp() {
   console.log(ex('Total expenses in April 2025'));
   console.log(ex('Expense breakdown by category'));
   console.log(ex('Top 5 expenses this year'));
+  console.log(ex('Show details of expense <id>'));
   console.log(ex('Update expense <id> amount to 600'));
   console.log(ex('Delete expense <id>'));
 
@@ -72,6 +73,7 @@ function printHelp() {
   console.log(ex('Show all incomes'));
   console.log(ex('Income breakdown by source'));
   console.log(ex('Total income this year'));
+  console.log(ex('Show details of income <id>'));
   console.log(ex('Update income <id> source to Freelance'));
   console.log(ex('Delete income <id>'));
 
@@ -95,6 +97,8 @@ function printHelp() {
   console.log(ex('List recurring transactions'));
   console.log(ex('Show due recurring transactions'));
   console.log(ex('Post recurring <id>'));
+  console.log(ex('Update recurring <id> amount to 13000'));
+  console.log(ex('Reactivate recurring <id>'));
   console.log(ex('Deactivate recurring <id>'));
 
   console.log(sec('Search & Export'));
@@ -110,35 +114,42 @@ function printHelp() {
 class FinanceBotApp {
   constructor() {
     this.rl = null;
+    // Conversation history (excludes system message — injected fresh per call)
+    this.history = [];
+  }
 
-    // System prompt — the AI's identity and rules
-    this.systemMessage = {
+  // ── System prompt (rebuilt each turn so the date is always current) ─────
+  get systemMessage() {
+    const today = new Date().toLocaleDateString('en-IN', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    });
+    const year = new Date().getFullYear();
+
+    return {
       role: 'system',
       content: `You are FinanceBot, a smart and friendly personal finance assistant for Indian users.
-Currency is always INR (₹). Today's date is ${new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}.
+Currency is always INR (₹). Today's date is ${today}.
 
 Available tools:
-  EXPENSE:   addExpense, deleteExpense, updateExpense, getTotalExpense, listExpenses, expenseCategoryBreakdown, getTopExpenses
-  INCOME:    addIncome, deleteIncome, updateIncome, getTotalIncome, listIncomes, incomeSourceBreakdown
+  EXPENSE:   addExpense, deleteExpense, updateExpense, getTotalExpense, listExpenses, expenseCategoryBreakdown, getTopExpenses, getExpenseById
+  INCOME:    addIncome, deleteIncome, updateIncome, getTotalIncome, listIncomes, incomeSourceBreakdown, getIncomeById
   ANALYTICS: getMoneyBalance, getSavingsRate, getMonthlySummary, getFullReport
   BUDGET:    setBudget, checkBudget, deleteBudget, listBudgets
-  RECURRING: addRecurring, listRecurring, getDueRecurring, postRecurring, deactivateRecurring, deleteRecurring
+  RECURRING: addRecurring, listRecurring, getDueRecurring, postRecurring, updateRecurring, deactivateRecurring, reactivateRecurring, deleteRecurring
   SEARCH:    searchTransactions
   EXPORT:    exportTransactions
 
 Strict rules:
 1. ALWAYS call the appropriate tool to answer finance questions. Never invent or guess numbers.
 2. When the user says "this month", compute the correct YYYY-MM-DD date range using today's date above.
-3. When the user says "this year", use ${new Date().getFullYear()}-01-01 to ${new Date().getFullYear()}-12-31.
+3. When the user says "this year", use ${year}-01-01 to ${year}-12-31.
 4. For delete/update operations, if no ID is given, first call listExpenses or listIncomes so the user can identify the record.
 5. Show tool output verbatim — do not paraphrase tables or numbers.
 6. Keep conversational replies concise. Use ₹ for all amounts.
 7. If asked something unrelated to personal finance, politely decline and redirect.
-8. When a user adds a past transaction, use the date field — do not default to today.`,
+8. When a user adds a past transaction, use the date field — do not default to today.
+9. To show full details of one record, use getExpenseById or getIncomeById with the full ID.`,
     };
-
-    // Conversation history (excludes system message — injected per call)
-    this.history = [];
   }
 
   // ── Initialise DB and models ────────────────────────────────────────────
@@ -172,6 +183,7 @@ Strict rules:
         case 'listExpenses':             return await financeService.listExpenses(args);
         case 'expenseCategoryBreakdown': return await financeService.expenseCategoryBreakdown(args);
         case 'getTopExpenses':           return await financeService.getTopExpenses(args);
+        case 'getExpenseById':           return await financeService.getExpenseById(args);
 
         // ── Income ───────────────────────────────────────────────────────
         case 'addIncome':                return await financeService.addIncome(args);
@@ -180,6 +192,7 @@ Strict rules:
         case 'getTotalIncome':           return await financeService.getTotalIncome(args);
         case 'listIncomes':              return await financeService.listIncomes(args);
         case 'incomeSourceBreakdown':    return await financeService.incomeSourceBreakdown(args);
+        case 'getIncomeById':            return await financeService.getIncomeById(args);
 
         // ── Analytics ────────────────────────────────────────────────────
         case 'getMoneyBalance':          return await financeService.getMoneyBalance(args);
@@ -199,6 +212,8 @@ Strict rules:
         case 'getDueRecurring':          return await financeService.getDueRecurring();
         case 'postRecurring':            return await financeService.postRecurring(args);
         case 'deactivateRecurring':      return await financeService.deactivateRecurring(args);
+        case 'reactivateRecurring':      return await financeService.reactivateRecurring(args);
+        case 'updateRecurring':          return await financeService.updateRecurring(args);
         case 'deleteRecurring':          return await financeService.deleteRecurring(args);
 
         // ── Search & Export ──────────────────────────────────────────────
@@ -217,6 +232,12 @@ Strict rules:
   // ── One full agentic turn (user message → tool calls → final reply) ─────
   async runTurn(userInput) {
     this.history.push({ role: 'user', content: userInput });
+
+    // Agent-side history cap: keep last 40 messages (20 turns) to prevent
+    // unbounded memory growth. groqService also trims for the API token limit.
+    if (this.history.length > 40) {
+      this.history = this.history.slice(-40);
+    }
 
     // Agentic loop: keep calling until the model stops issuing tool calls
     while (true) {

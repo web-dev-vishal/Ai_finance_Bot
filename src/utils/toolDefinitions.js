@@ -120,6 +120,20 @@ export const toolDefinitions = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'getExpenseById',
+      description: 'Get full details of a single expense by its MongoDB ObjectId.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId of the expense' },
+        },
+        required: ['id'],
+      },
+    },
+  },
 
   // ══════════════════════════════════════════════════════════════════════════
   // INCOME TOOLS
@@ -219,6 +233,20 @@ export const toolDefinitions = [
           from: { type: 'string', description: 'Start date YYYY-MM-DD' },
           to:   { type: 'string', description: 'End date YYYY-MM-DD' },
         },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'getIncomeById',
+      description: 'Get full details of a single income record by its MongoDB ObjectId.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Full 24-character MongoDB ObjectId of the income' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -404,6 +432,40 @@ export const toolDefinitions = [
         type: 'object',
         properties: {
           id: { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'reactivateRecurring',
+      description: 'Re-enable a previously paused recurring transaction.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'updateRecurring',
+      description: 'Update the name, amount, frequency, category, source, or description of a recurring transaction.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:          { type: 'string', description: 'Full MongoDB ObjectId of the recurring item' },
+          name:        { type: 'string' },
+          amount:      { type: 'number' },
+          frequency:   { type: 'string', description: '"daily", "weekly", "monthly", or "yearly"' },
+          category:    { type: 'string' },
+          source:      { type: 'string' },
+          description: { type: 'string' },
         },
         required: ['id'],
       },

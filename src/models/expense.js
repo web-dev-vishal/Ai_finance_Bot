@@ -168,6 +168,14 @@ class ExpenseModel {
     ]).toArray();
   }
 
+  // ── Get by ID ─────────────────────────────────────────────────────────────
+  async getById({ id }) {
+    validateObjectId(id, 'expense ID');
+    const doc = await this.collection.findOne({ _id: new ObjectId(id) });
+    if (!doc) throw new Error(`Expense with ID "${id}" not found.`);
+    return doc;
+  }
+
   // ── Export all (for CSV/JSON export) ─────────────────────────────────────
   async exportAll({ from, to } = {}) {
     const match = {};

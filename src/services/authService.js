@@ -202,7 +202,8 @@ class AuthService {
   // ── Login ─────────────────────────────────────────────────────────────────
   /**
    * Authenticate with email + password.
-   * Enforces rate limiting: 5 failed attempts → 15-min lockout.
+   * Rate limiting only applies to existing accounts to avoid burning
+   * attempts on typos or unregistered emails.
    * @param {{ email, password }} args
    * @returns {Promise<{ user, token }>}
    */
@@ -212,11 +213,19 @@ class AuthService {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Rate-limit check
+    // Check if the account exists first — give a clear hint if not
+    const exists = await userModel.findByEmail(normalizedEmail);
+    if (!exists) {
+      throw new Error(
+        `No account found for "${normalizedEmail}". Please register first (choose option 2).`
+      );
+    }
+
+    // Rate-limit check — only for real accounts
     const attempts = await redisClient.getLoginAttempts(normalizedEmail);
     if (attempts >= MAX_LOGIN_ATTEMPTS) {
       throw new Error(
-        'Too many failed login attempts. Please wait 15 minutes or reset your password.'
+        'Too many failed login attempts. Please wait 15 minutes or reset your password (option 3).'
       );
     }
 
@@ -226,8 +235,8 @@ class AuthService {
       const remaining = MAX_LOGIN_ATTEMPTS - (attempts + 1);
       throw new Error(
         remaining > 0
-          ? `Invalid email or password. ${remaining} attempt(s) remaining.`
-          : 'Too many failed login attempts. Please wait 15 minutes or reset your password.'
+          ? `Wrong password. ${remaining} attempt(s) remaining before lockout.`
+          : 'Too many failed login attempts. Please wait 15 minutes or reset your password (option 3).'
       );
     }
 

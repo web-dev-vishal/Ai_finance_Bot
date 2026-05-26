@@ -1,11 +1,14 @@
 /**
  * Auth CLI — interactive terminal prompts for login, register, and password reset.
  *
- * Password input features:
+ * Password input:
  *  - Characters are hidden (shown as *) by default
- *  - Press Tab to toggle show/hide password while typing
- *  - Press Backspace to delete characters
+ *  - Press Tab to toggle show / hide while typing
+ *  - Press Backspace to delete
  *  - Press Enter to confirm
+ *
+ * After readPassword() finishes it hands control cleanly back to readline
+ * so the menu and all subsequent prompts keep working.
  */
 import authService from '../services/authService.js';
 import { saveSession, loadSession, clearSession } from './sessionStore.js';
@@ -24,73 +27,79 @@ const clr  = (color, text) => `${C[color]}${text}${C.reset}`;
 const bold = (text)         => `${C.bold}${text}${C.reset}`;
 const dim  = (text)         => `${C.dim}${text}${C.reset}`;
 
-// ── Hidden password input ─────────────────────────────────────────────────────
+// ── Password input (raw mode, masked) ────────────────────────────────────────
 
 /**
- * Read a password from stdin with:
- *  - Characters masked as  *  by default
- *  - Tab key toggles between  *  (hidden) and plain text (visible)
- *  - Backspace deletes the last character
- *  - Enter submits
+ * Read a password character-by-character using raw stdin.
  *
+ * Pauses the readline interface before taking over stdin, then resumes it
+ * afterwards — this is the key fix that keeps the menu working after input.
+ *
+ * @param {import('readline/promises').Interface} rl
  * @param {string} label  e.g. "Password" or "Confirm "
  * @returns {Promise<string>}
  */
-function readPassword(label) {
-  return new Promise((resolve, reject) => {
+function readPassword(rl, label) {
+  return new Promise((resolve) => {
     const stdin  = process.stdin;
     const stdout = process.stdout;
 
     let input   = '';
-    let visible = false; // hidden by default
+    let visible = false;
 
-    // Render the current line from scratch
-    function render() {
-      const masked  = visible ? input : '*'.repeat(input.length);
-      const eyeHint = dim(' [Tab: ' + (visible ? 'hide' : 'show') + ']');
-      // \r moves to start of line, \x1b[2K clears the whole line
-      stdout.write(`\r\x1b[2K${clr('cyan', `  ${label} › `)}${masked}${eyeHint}`);
-    }
-
-    // Switch stdin to raw mode so we get each keypress immediately
-    const wasRaw = stdin.isRaw;
-    if (stdin.isTTY) stdin.setRawMode(true);
+    // ── Hand off stdin from readline to us ──────────────────────────────────
+    rl.pause();                              // stop readline consuming keypresses
+    if (stdin.isTTY) stdin.setRawMode(true); // get every keypress immediately
     stdin.resume();
     stdin.setEncoding('utf8');
 
-    function cleanup() {
-      stdin.setEncoding('utf8'); // restore
-      if (stdin.isTTY) stdin.setRawMode(wasRaw || false);
-      stdin.pause();
-      stdin.removeListener('data', onData);
+    // ── Render current line ──────────────────────────────────────────────────
+    function render() {
+      const masked = visible ? input : '*'.repeat(input.length);
+      const hint   = dim(' [Tab: ' + (visible ? 'hide' : 'show') + ']');
+      // \r  = go to start of line
+      // \x1b[2K = erase entire line
+      stdout.write(`\r\x1b[2K${clr('cyan', `  ${label} › `)}${masked}${hint}`);
     }
 
+    // ── Hand stdin back to readline ──────────────────────────────────────────
+    function finish(value) {
+      stdin.removeListener('data', onData);
+      if (stdin.isTTY) stdin.setRawMode(false); // leave raw mode
+      stdin.pause();                             // let readline manage resume
+
+      // Print final masked line (no hint shown)
+      stdout.write(
+        `\r\x1b[2K${clr('cyan', `  ${label} › `)}${'*'.repeat(value.length)}\n`
+      );
+
+      rl.resume(); // give control back to readline — THIS is the critical fix
+      resolve(value);
+    }
+
+    // ── Keypress handler ─────────────────────────────────────────────────────
     function onData(ch) {
-      // Ctrl+C — exit gracefully
+      // Ctrl+C — exit cleanly
       if (ch === '\u0003') {
-        cleanup();
-        stdout.write('\n');
+        finish('');
         console.log(clr('yellow', '\n  Interrupted.\n'));
         process.exit(0);
       }
 
       // Enter — submit
       if (ch === '\r' || ch === '\n') {
-        cleanup();
-        // Move to next line and clear the hint
-        stdout.write(`\r\x1b[2K${clr('cyan', `  ${label} › `)}${'*'.repeat(input.length)}\n`);
-        resolve(input);
+        finish(input);
         return;
       }
 
-      // Tab — toggle show/hide
+      // Tab — toggle show / hide
       if (ch === '\t') {
         visible = !visible;
         render();
         return;
       }
 
-      // Backspace / Delete
+      // Backspace
       if (ch === '\u007f' || ch === '\b') {
         if (input.length > 0) {
           input = input.slice(0, -1);
@@ -99,10 +108,10 @@ function readPassword(label) {
         return;
       }
 
-      // Ignore other control characters (arrows, function keys, etc.)
-      if (ch < ' ' && ch !== '\t') return;
+      // Ignore other control characters (arrow keys, F-keys, etc.)
+      if (ch < ' ') return;
 
-      // Regular printable character
+      // Printable character
       input += ch;
       render();
     }
@@ -119,16 +128,19 @@ async function ask(rl, label) {
   return answer.trim();
 }
 
-// ── Divider ───────────────────────────────────────────────────────────────────
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
 function divider() {
   console.log(clr('cyan', '  ' + '─'.repeat(48)));
 }
 
-// ── Auth banner & menu ────────────────────────────────────────────────────────
-
 function printAuthBanner() {
   console.log('\n' + clr('cyan', '  ' + '═'.repeat(48)));
-  console.log(clr('cyan', '  ║') + bold('   🔐  FinanceBot — Authentication          ') + clr('cyan', '║'));
+  console.log(
+    clr('cyan', '  ║') +
+    bold('   🔐  FinanceBot — Authentication          ') +
+    clr('cyan', '║')
+  );
   console.log(clr('cyan', '  ' + '═'.repeat(48)));
 }
 
@@ -142,12 +154,13 @@ function printMenu() {
 }
 
 // ── Login ─────────────────────────────────────────────────────────────────────
+
 async function doLogin(rl) {
   console.log(clr('cyan', '\n  Login\n'));
   divider();
 
   const email    = await ask(rl, 'Email   ');
-  const password = await readPassword('Password');
+  const password = await readPassword(rl, 'Password');
 
   divider();
 
@@ -158,14 +171,15 @@ async function doLogin(rl) {
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
+
 async function doRegister(rl) {
   console.log(clr('cyan', '\n  Create a new account\n'));
   divider();
 
   const name     = await ask(rl, 'Name    ');
   const email    = await ask(rl, 'Email   ');
-  const password = await readPassword('Password');
-  const confirm  = await readPassword('Confirm ');
+  const password = await readPassword(rl, 'Password');
+  const confirm  = await readPassword(rl, 'Confirm ');
 
   divider();
 
@@ -183,6 +197,7 @@ async function doRegister(rl) {
 }
 
 // ── Forgot password ───────────────────────────────────────────────────────────
+
 async function doForgotPassword(rl) {
   console.log(clr('cyan', '\n  Password Reset\n'));
   divider();
@@ -195,8 +210,8 @@ async function doForgotPassword(rl) {
 
   divider();
   const otp         = await ask(rl, 'OTP     ');
-  const newPassword = await readPassword('New Pass');
-  const confirm     = await readPassword('Confirm ');
+  const newPassword = await readPassword(rl, 'New Pass');
+  const confirm     = await readPassword(rl, 'Confirm ');
   divider();
 
   if (newPassword !== confirm) {
@@ -212,15 +227,15 @@ async function doForgotPassword(rl) {
 
 /**
  * Run the authentication gate.
- * - Tries to restore a saved session first (auto-login).
- * - If no valid session, shows the auth menu.
- * - Returns the authenticated user object.
+ *  - Tries to restore a saved session first (auto-login).
+ *  - If no valid session, shows the auth menu.
+ *  - Returns the authenticated user object.
  *
  * @param {import('readline/promises').Interface} rl
  * @returns {Promise<{ _id, name, email }>}
  */
 export async function runAuthGate(rl) {
-  // 1. Try to restore saved session — skip menu if still valid
+  // 1. Try to restore saved session
   const savedToken = await loadSession();
   if (savedToken) {
     try {
@@ -228,12 +243,11 @@ export async function runAuthGate(rl) {
       console.log(dim(`\n  Auto-logged in as ${user.name} (${user.email})`));
       return user;
     } catch {
-      // Session expired or revoked — clear and show menu
-      await clearSession();
+      await clearSession(); // expired or revoked — fall through to menu
     }
   }
 
-  // 2. Show auth menu
+  // 2. Auth menu loop
   printAuthBanner();
 
   while (true) {
@@ -265,7 +279,7 @@ export async function runAuthGate(rl) {
     } catch (err) {
       console.log(clr('red', `\n  ❌  ${err.message}\n`));
 
-      // Helpful hint when account doesn't exist
+      // Hint to register when account doesn't exist
       if (
         err.message.includes('No account found') ||
         err.message.includes('Invalid email or password')
@@ -281,8 +295,8 @@ export async function runAuthGate(rl) {
 }
 
 /**
- * Logout the current user — blacklists the PASETO token and clears the session file.
- * @param {string} token  The raw PASETO token string
+ * Logout — blacklists the PASETO token and clears the local session file.
+ * @param {string} token
  */
 export async function runLogout(token) {
   await authService.logout(token);

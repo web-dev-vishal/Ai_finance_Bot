@@ -13,63 +13,44 @@ class DatabaseConnection {
       this.client = new MongoClient(this.uri);
       await this.client.connect();
       this.db = this.client.db(this.dbName);
-      console.log('✅ Connected to MongoDB at', this.uri);
+      console.log('✅ Connected to MongoDB →', this.uri);
       return this.db;
     } catch (error) {
-      console.error('❌ MongoDB connection failed:', error);
+      console.error('❌ MongoDB connection failed:', error.message);
       throw error;
     }
   }
 
   async initializeCollections() {
     const expenseCol = this.db.collection('expenses');
-    const incomeCol = this.db.collection('incomes');
+    const incomeCol  = this.db.collection('incomes');
+    const budgetCol  = this.db.collection('budgets');
 
-    // Create seed documents to ensure collections exist
-    await expenseCol.insertOne({ 
-      _seed: true, 
-      name: 'Seed expense', 
-      amount: 1, 
-      createdAt: new Date() 
-    });
-    
-    await incomeCol.insertOne({ 
-      _seed: true, 
-      name: 'Seed income', 
-      amount: 1, 
-      createdAt: new Date() 
-    });
+    // Create indexes for performance (idempotent)
+    await expenseCol.createIndex({ createdAt: -1 });
+    await expenseCol.createIndex({ category: 1 });
+    await expenseCol.createIndex({ name: 'text', description: 'text' });
 
-    console.log('✅ Database', this.dbName, 'and collections created / verified.');
-    console.log('💡 Open MongoDB Compass → connect → you should now see:', this.dbName);
+    await incomeCol.createIndex({ createdAt: -1 });
+    await incomeCol.createIndex({ source: 1 });
+    await incomeCol.createIndex({ name: 'text', description: 'text' });
+
+    await budgetCol.createIndex({ month: 1 }, { unique: true });
+
+    console.log(`✅ Database "${this.dbName}" ready.`);
   }
 
   async close() {
     if (this.client) {
       await this.client.close();
-      console.log('✅ MongoDB connection closed');
+      console.log('✅ MongoDB connection closed.');
     }
   }
 
   getDatabase() {
+    if (!this.db) throw new Error('DB not connected. Call connect() first.');
     return this.db;
   }
 }
 
 export default new DatabaseConnection();
-
-// import { MongoClient } from 'mongodb';
-// const uri = process.env.MONGO_URI || 'mongodb://localhost:27017';
-// const client = new MongoClient(uri);
-// let db = null;
-// export async function connect() {
-// if (db) return db;               // already connected
-// await client.connect();
-// db = client.db('financeBot');
-// console.log('✅  MongoDB connected');
-// return db;
-// }
-// export function getDatabase() {
-// if (!db) throw new Error('DB not connected. Call connect() first.');
-// return db;
-// }

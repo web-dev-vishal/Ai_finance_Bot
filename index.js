@@ -1,6 +1,2 @@
-const app = require('./app');
-const port = process.env.PORT || 3000;
-
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+// Entry point — delegates to the agent
+import './src/agent.js';

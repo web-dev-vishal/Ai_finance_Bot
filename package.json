@@ -1,22 +1,18 @@
 {
-  "name": "first-agent",
+  "name": "financebot",
+  "version": "2.0.0",
+  "description": "AI-powered personal finance terminal bot using Groq LLaMA + MongoDB",
   "module": "index.js",
   "type": "module",
   "scripts": {
     "start": "node --env-file=.env src/agent.js",
-    "dev": "node --env-file=.env src/agent.js"
-  },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "dev":   "node --env-file=.env --watch src/agent.js"
   },
   "dependencies": {
-    "bcryptjs": "^3.0.2",
-    "dotenv": "^17.2.1",
     "groq-sdk": "^0.27.0",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.16.5"
+    "mongodb":  "^6.17.0"
+  },
+  "engines": {
+    "node": ">=20.6.0"
   }
 }

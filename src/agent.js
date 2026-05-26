@@ -40,7 +40,7 @@ if (!process.env.GROQ_API_KEY) {
 if (!process.env.PASETO_SECRET_KEY) {
   console.error('\n❌  PASETO_SECRET_KEY is not set in your .env file.');
   console.error('    Generate one by running:');
-  console.error('    node -e "const c=require(\'crypto\');const {privateKey}=c.generateKeyPairSync(\'ed25519\');console.log(privateKey.export({type:\'pkcs8\',format:\'der\'}).toString(\'hex\'))"');
+  console.error('    node -e "const c=require(\'crypto\');const {privateKey}=c.generateKeyPairSync(\'ed25519\');const raw=privateKey.export({type:\'pkcs8\',format:\'der\'});const seed=raw.slice(-32);const pub=c.createPublicKey(privateKey).export({type:\'spki\',format:\'der\'}).slice(-32);console.log(Buffer.concat([seed,pub]).toString(\'hex\'));"');
   console.error('    Then paste the output as PASETO_SECRET_KEY in .env\n');
   exit(1);
 }

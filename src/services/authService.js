@@ -38,23 +38,24 @@ function getExpirySeconds() {
 
 /**
  * Load the Ed25519 private key from PASETO_SECRET_KEY (hex string).
+ * The key must be 64 raw bytes: 32-byte seed + 32-byte public key.
  * Throws a clear error if the env var is missing or malformed.
  */
 function getPrivateKey() {
   const hex = process.env.PASETO_SECRET_KEY;
   if (!hex) {
     throw new Error(
-      'PASETO_SECRET_KEY is not set in .env\n' +
-      '  Generate one with: node -e "const {generateKeyPairSync}=require(\'crypto\');' +
-      'const {privateKey}=generateKeyPairSync(\'ed25519\');' +
-      'console.log(privateKey.export({type:\'pkcs8\',format:\'der\'}).toString(\'hex\'))"'
+      'PASETO_SECRET_KEY is not set in .env — see .env.example for the generation command.'
     );
   }
   try {
     const keyBytes = Buffer.from(hex, 'hex');
+    if (keyBytes.length !== 64) {
+      throw new Error(`Expected 64 bytes, got ${keyBytes.length}`);
+    }
     return V4.bytesToKeyObject(keyBytes, 'private');
-  } catch {
-    throw new Error('PASETO_SECRET_KEY is invalid. Re-generate it using the command in .env.example.');
+  } catch (err) {
+    throw new Error(`PASETO_SECRET_KEY is invalid: ${err.message}. Re-generate it using the command in .env.example.`);
   }
 }
 
@@ -103,18 +104,24 @@ async function verifyToken(token) {
 }
 
 /**
- * Decode a PASETO token without verifying the signature.
+ * Decode a PASETO v4.public token without verifying the signature.
  * Used only for extracting the expiry on logout.
+ *
+ * PASETO v4.public format: "v4.public.<base64url(payload_bytes + 64_byte_sig)>"
+ * The payload JSON occupies all bytes except the last 64 (Ed25519 signature).
+ *
  * @param {string} token
  * @returns {{ exp?: string } | null}
  */
 function decodeTokenUnsafe(token) {
   try {
-    // PASETO v4.public format: v4.public.<base64url-payload>.<base64url-footer>
     const parts = token.split('.');
-    if (parts.length < 3) return null;
-    const raw = Buffer.from(parts[2], 'base64url').toString('utf8');
-    return JSON.parse(raw);
+    // Must be exactly "v4.public.<data>" — 3 dot-separated parts
+    if (parts.length !== 3 || parts[0] !== 'v4' || parts[1] !== 'public') return null;
+    const raw          = Buffer.from(parts[2], 'base64url');
+    // Last 64 bytes are the Ed25519 signature; everything before is the JSON payload
+    const payloadBytes = raw.slice(0, raw.length - 64);
+    return JSON.parse(payloadBytes.toString('utf8'));
   } catch {
     return null;
   }
